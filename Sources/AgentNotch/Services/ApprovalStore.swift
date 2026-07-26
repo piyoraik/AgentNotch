@@ -1,11 +1,15 @@
-import AppKit
 import Combine
+import Foundation
 
-/// Holds approval requests awaiting a decision, and owns the socket server
-/// that produced them.
+/// Holds approval requests awaiting a decision.
 ///
-/// `@unchecked Sendable` because the socket server hands requests over from a
-/// background queue; every mutation below is hopped onto main first.
+/// The socket that produces them belongs to `HookServer`, which serves the
+/// notice side too; this store only owns the queue of unanswered questions.
+/// Sound and Dock attention live in `AlertCenter`, so the three things that
+/// can poke the user can't drift apart.
+///
+/// `@unchecked Sendable` because `handle` is called from the server's
+/// connection queue; every mutation below is hopped onto main first.
 final class ApprovalStore: ObservableObject, @unchecked Sendable {
     struct Pending: Identifiable {
         let request: ApprovalRequest
@@ -16,40 +20,28 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
 
     @Published private(set) var pending: [Pending] = []
 
-    private var server: ApprovalServer?
-    private let settings: AppSettings
     private let alwaysAllow: AlwaysAllowStore
 
-    init(settings: AppSettings = .shared, alwaysAllow: AlwaysAllowStore = .shared) {
-        self.settings = settings
+    init(alwaysAllow: AlwaysAllowStore = .shared) {
         self.alwaysAllow = alwaysAllow
     }
 
-    func start() {
-        let server = ApprovalServer { [weak self] request, respond in
-            DispatchQueue.main.async {
-                guard let self else {
-                    respond(.passthrough)
-                    return
-                }
-
-                // A standing approval answers silently: no panel, no alert.
-                if self.alwaysAllow.allows(request) {
-                    respond(.allow)
-                    return
-                }
-
-                self.pending.append(Pending(request: request, respond: respond))
-                if self.settings.bounceOnApproval {
-                    NSApp.requestUserAttention(.informationalRequest)
-                }
-                if self.settings.playSoundOnApproval {
-                    NSSound(named: self.settings.approvalSoundName)?.play()
-                }
+    /// Entry point from `HookServer`, called off the main queue.
+    func handle(_ request: ApprovalRequest, respond: @escaping @Sendable (ApprovalDecision) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                respond(.passthrough)
+                return
             }
+
+            // A standing approval answers silently: no panel, no alert.
+            if self.alwaysAllow.allows(request) {
+                respond(.allow)
+                return
+            }
+
+            self.pending.append(Pending(request: request, respond: respond))
         }
-        server.start()
-        self.server = server
     }
 
     func resolve(_ pending: Pending, with decision: ApprovalDecision) {
@@ -62,5 +54,12 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
     func allowAlways(_ pending: Pending, rule: AlwaysAllowRule) {
         alwaysAllow.add(rule)
         resolve(pending, with: .allow)
+    }
+
+    /// Whether a given session is already blocked on a question in the panel.
+    /// The CLI fires its own `Notification` for the same permission prompt, and
+    /// a notice about a question the user is already looking at is noise.
+    func isBlocked(sessionId: String) -> Bool {
+        pending.contains { $0.request.sessionId == sessionId }
     }
 }

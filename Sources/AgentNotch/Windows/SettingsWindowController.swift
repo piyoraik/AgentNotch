@@ -12,6 +12,7 @@ import SwiftUI
 final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
     private let settings: AppSettings
     private let updates: UpdateStore
+    private let hooks: HookInstaller
     private var pane: SettingsPane
     /// Kept alive per pane so scroll position and control focus survive a
     /// round trip through the tab bar.
@@ -22,9 +23,10 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
 
     private static let contentWidth: CGFloat = 500
 
-    init(settings: AppSettings = .shared, updates: UpdateStore) {
+    init(settings: AppSettings = .shared, updates: UpdateStore, hooks: HookInstaller) {
         self.settings = settings
         self.updates = updates
+        self.hooks = hooks
         // 旧バージョンが書いた "refresh" のような値もここで先頭ペインに落ちる。
         pane = SettingsPane(rawValue: settings.lastSettingsPane) ?? .general
 
@@ -71,6 +73,10 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func present() {
+        // The hook can be taken apart from outside the app (a hand-edited
+        // settings.json, a reinstall), so re-read it rather than trusting what
+        // the pane was told at launch.
+        hooks.refresh()
         // .accessory apps are not activated by ordering a window front, so the
         // window would come up behind the terminal without this.
         NSApp.activate(ignoringOtherApps: true)
@@ -105,7 +111,8 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
         let host = hosts[pane] ?? {
             let host = NSHostingController(
                 rootView: AnyView(
-                    pane.view(settings: settings, updates: updates).frame(width: Self.contentWidth)
+                    pane.view(settings: settings, updates: updates, hooks: hooks)
+                        .frame(width: Self.contentWidth)
                 )
             )
             hosts[pane] = host

@@ -51,6 +51,24 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
     @Published var playSoundOnApproval: Bool { didSet { write(.playSoundOnApproval, playSoundOnApproval) } }
     @Published var approvalSoundName: String { didSet { write(.approvalSoundName, approvalSoundName) } }
 
+    // MARK: - 作業の完了
+
+    @Published var notifyOnCompletion: Bool { didSet { write(.notifyOnCompletion, notifyOnCompletion) } }
+    @Published var playSoundOnCompletion: Bool { didSet { write(.playSoundOnCompletion, playSoundOnCompletion) } }
+    @Published var completionSoundName: String { didSet { write(.completionSoundName, completionSoundName) } }
+    /// Shortest busy stretch worth announcing. A turn that came back in a
+    /// couple of seconds was answered while the user was still looking at the
+    /// terminal; chiming for it is noise.
+    @Published var completionMinimumSeconds: Double { didSet { write(.completionMinimumSeconds, completionMinimumSeconds) } }
+
+    // MARK: - 応答待ち
+
+    /// Whether to surface the CLI's own `Notification` hook — the events that
+    /// AgentNotch cannot answer for the user (plan approval, `AskUserQuestion`,
+    /// a session idling on a prompt).
+    @Published var notifyOnWaiting: Bool { didSet { write(.notifyOnWaiting, notifyOnWaiting) } }
+    @Published var playSoundOnWaiting: Bool { didSet { write(.playSoundOnWaiting, playSoundOnWaiting) } }
+
     // MARK: - ソフトウェア更新
 
     /// Whether to ask GitHub for a newer release once a day. Checking is the
@@ -96,6 +114,15 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         bounceOnApproval = flag(.bounceOnApproval, true)
         playSoundOnApproval = flag(.playSoundOnApproval, false)
         approvalSoundName = defaults.string(forKey: Key.approvalSoundName.rawValue) ?? "Ping"
+
+        notifyOnCompletion = flag(.notifyOnCompletion, true)
+        playSoundOnCompletion = flag(.playSoundOnCompletion, true)
+        completionSoundName = defaults.string(forKey: Key.completionSoundName.rawValue) ?? "Glass"
+        completionMinimumSeconds = number(.completionMinimumSeconds, 15)
+
+        notifyOnWaiting = flag(.notifyOnWaiting, true)
+        playSoundOnWaiting = flag(.playSoundOnWaiting, true)
+
         automaticUpdateChecks = flag(.automaticUpdateChecks, true)
         lastSettingsPane = defaults.string(forKey: Key.lastSettingsPane.rawValue) ?? "general"
     }
@@ -131,6 +158,15 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         bounceOnApproval = true
         playSoundOnApproval = false
         approvalSoundName = "Ping"
+
+        notifyOnCompletion = true
+        playSoundOnCompletion = true
+        completionSoundName = "Glass"
+        completionMinimumSeconds = 15
+
+        notifyOnWaiting = true
+        playSoundOnWaiting = true
+
         automaticUpdateChecks = true
         lastSettingsPane = "general"
     }
@@ -147,6 +183,8 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         case sessionPollInterval, summaryPollInterval, transcriptPollInterval
         case usageEnabled, usageRefreshInterval
         case autoOpenOnApproval, bounceOnApproval, playSoundOnApproval, approvalSoundName
+        case notifyOnCompletion, playSoundOnCompletion, completionSoundName, completionMinimumSeconds
+        case notifyOnWaiting, playSoundOnWaiting
         case automaticUpdateChecks
         case lastSettingsPane
     }

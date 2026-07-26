@@ -5,6 +5,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var monitor: SessionMonitor!
     private var summaries: SummaryStore!
     private var approvals: ApprovalStore!
+    private var notices: NoticeStore!
+    private var alerts: AlertCenter!
+    private var hooks: HookInstaller!
+    private var hookServer: HookServer!
     private var usage: UsageStore!
     private var updates: UpdateStore!
     private var notchController: NotchWindowController!
@@ -16,14 +20,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         monitor = SessionMonitor(settings: settings)
         summaries = SummaryStore(monitor: monitor, settings: settings)
-        approvals = ApprovalStore(settings: settings)
-        approvals.start()
+        approvals = ApprovalStore()
+        notices = NoticeStore(monitor: monitor, summaries: summaries, approvals: approvals, settings: settings)
+        alerts = AlertCenter(monitor: monitor, approvals: approvals, notices: notices, settings: settings)
+
+        hookServer = HookServer(
+            approval: { [approvals] request, respond in approvals?.handle(request, respond: respond) },
+            notice: { [notices] notice in notices?.receive(notice) }
+        )
+        hookServer.start()
+
+        // フックが指しているのは .app の外にあるブリッジのコピーなので、アプリを
+        // 更新しただけでは古いままになる。登録済みの人が黙って壊れるのを避ける
+        // ため、既に置いてあるものだけ配置し直す（新規の登録はしない）。
+        hooks = HookInstaller()
+        hooks.refreshInstalledBridge()
+
         usage = UsageStore(settings: settings)
         usage.start()
         updates = UpdateStore(settings: settings)
         updates.start()
 
-        settingsController = SettingsWindowController(settings: settings, updates: updates)
+        settingsController = SettingsWindowController(settings: settings, updates: updates, hooks: hooks)
         statusItemController = StatusItemController(
             monitor: monitor,
             summaries: summaries,
@@ -39,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             monitor: monitor,
             summaries: summaries,
             approvals: approvals,
+            notices: notices,
+            alerts: alerts,
             usage: usage,
             settings: settings
         )

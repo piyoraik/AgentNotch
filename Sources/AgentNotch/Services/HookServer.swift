@@ -1,9 +1,16 @@
 import Darwin
 import Foundation
 
-/// Listens on a unix socket for PermissionRequest payloads relayed by the
-/// bridge helper, and writes back the decision the user made in the notch.
-final class ApprovalServer {
+/// Listens on a unix socket for the hook payloads relayed by the bridge
+/// helper, and writes back the decision the user made in the notch.
+///
+/// Two events arrive here. `PermissionRequest` is a question and gets an
+/// answer; `Notification` is a statement and gets none — the socket is closed
+/// straight away so the hook is out of the session's way.
+///
+/// The socket keeps its `approvals.sock` name: a bridge copy installed by an
+/// older version has that path compiled in.
+final class HookServer {
     static let socketURL: URL = FileManager.default
         .homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/AgentNotch", isDirectory: true)
@@ -12,16 +19,21 @@ final class ApprovalServer {
     private var listenFD: Int32 = -1
     private let acceptQueue = DispatchQueue(label: "AgentNotch.approval.accept")
     private let connectionQueue = DispatchQueue(label: "AgentNotch.approval.connection", attributes: .concurrent)
-    private let handler: @Sendable (ApprovalRequest, @escaping @Sendable (ApprovalDecision) -> Void) -> Void
+    private let approval: @Sendable (ApprovalRequest, @escaping @Sendable (ApprovalDecision) -> Void) -> Void
+    private let notice: @Sendable (AgentNotice) -> Void
 
-    init(handler: @escaping @Sendable (ApprovalRequest, @escaping @Sendable (ApprovalDecision) -> Void) -> Void) {
-        self.handler = handler
+    init(
+        approval: @escaping @Sendable (ApprovalRequest, @escaping @Sendable (ApprovalDecision) -> Void) -> Void,
+        notice: @escaping @Sendable (AgentNotice) -> Void
+    ) {
+        self.approval = approval
+        self.notice = notice
     }
 
     func start() {
-        let path = ApprovalServer.socketURL.path
+        let path = HookServer.socketURL.path
         try? FileManager.default.createDirectory(
-            at: ApprovalServer.socketURL.deletingLastPathComponent(),
+            at: HookServer.socketURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         // A socket file left behind by a previous run would block bind().
@@ -65,7 +77,7 @@ final class ApprovalServer {
         guard listenFD >= 0 else { return }
         close(listenFD)
         listenFD = -1
-        unlink(ApprovalServer.socketURL.path)
+        unlink(HookServer.socketURL.path)
     }
 
     private func acceptLoop(on fd: Int32) {
@@ -97,15 +109,27 @@ final class ApprovalServer {
         }
 
         guard let line = payload.split(separator: 0x0A).first,
-              let json = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-              let request = ApprovalRequest(json: json)
+              let json = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
         else {
-            ApprovalServer.respond(client: client, decision: .passthrough)
+            HookServer.respond(client: client, decision: .passthrough)
             return
         }
 
-        handler(request) { decision in
-            ApprovalServer.respond(client: client, decision: decision)
+        // A notification is informational: tell the app, then get out of the
+        // way. Holding the connection open would hold the hook open with it.
+        if json["hook_event_name"] as? String == "Notification" {
+            HookServer.respond(client: client, decision: .passthrough)
+            if let notice = AgentNotice(json: json) { self.notice(notice) }
+            return
+        }
+
+        guard let request = ApprovalRequest(json: json) else {
+            HookServer.respond(client: client, decision: .passthrough)
+            return
+        }
+
+        approval(request) { decision in
+            HookServer.respond(client: client, decision: decision)
         }
     }
 

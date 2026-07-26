@@ -1,12 +1,17 @@
 import Darwin
 import Foundation
 
-// Invoked by Claude Code as a PermissionRequest hook. Forwards the request to
-// a running AgentNotch over a unix socket and relays the user's decision.
+// Invoked by Claude Code as a hook. Forwards the payload to a running
+// AgentNotch over a unix socket and, for PermissionRequest, relays the user's
+// decision back.
 //
 // Every failure path exits 0 with no stdout: that reads as "no decision", so
 // Claude Code falls back to its own terminal prompt. A hook that hangs or
 // errors loudly would wedge every session on the machine.
+//
+// The same binary serves both events it is registered for. Notification is a
+// statement, not a question: it is handed over and the process leaves without
+// waiting, so nothing about the session's timing depends on the app.
 
 let socketPath = NSString(string: "~/Library/Application Support/AgentNotch/approvals.sock")
     .expandingTildeInPath
@@ -33,6 +38,15 @@ func emit(behavior: String) -> Never {
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard !input.isEmpty else { failOpen() }
+
+/// Whether this invocation has an answer to wait for. Anything unrecognised is
+/// treated as a permission request, which is the conservative reading: waiting
+/// for a decision that never comes costs a hook, deciding not to wait for one
+/// that was coming costs the user their answer.
+let waitsForDecision: Bool = {
+    let event = ((try? JSONSerialization.jsonObject(with: input)) as? [String: Any])?["hook_event_name"] as? String
+    return event != "Notification"
+}()
 
 let fd = socket(AF_UNIX, SOCK_STREAM, 0)
 guard fd >= 0 else { failOpen() }
@@ -65,7 +79,7 @@ guard connected == 0 else {
     failOpen()
 }
 
-var timeout = timeval(tv_sec: responseTimeout, tv_usec: 0)
+var timeout = timeval(tv_sec: waitsForDecision ? responseTimeout : 5, tv_usec: 0)
 setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 var sendTimeout = timeval(tv_sec: 5, tv_usec: 0)
 setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
@@ -79,6 +93,13 @@ let written: Int = request.withUnsafeBytes { buffer in
 guard written == request.count else {
     close(fd)
     failOpen()
+}
+
+// Nothing to hear back about: the app has it, and the session shouldn't be
+// held up while a panel gets drawn.
+guard waitsForDecision else {
+    close(fd)
+    exit(0)
 }
 
 var response = Data()

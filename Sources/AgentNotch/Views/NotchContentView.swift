@@ -7,6 +7,8 @@ struct NotchContentView: View {
     @ObservedObject var summaries: SummaryStore
     @ObservedObject var approvals: ApprovalStore
     @ObservedObject var alwaysAllow: AlwaysAllowStore = .shared
+    @ObservedObject var notices: NoticeStore
+    @ObservedObject var alerts: AlertCenter
     @ObservedObject var usage: UsageStore
     @ObservedObject var settings: AppSettings
     /// Width of the physical notch to leave uncovered; 0 on screens without one.
@@ -20,6 +22,8 @@ struct NotchContentView: View {
     private var showsUsage: Bool { settings.showUsageInNotch && settings.usageEnabled }
 
     private var hasApproval: Bool { !approvals.pending.isEmpty }
+
+    private var hasNotice: Bool { !notices.notices.isEmpty }
 
     /// マークとふちの色はこの一つの状態から決める。表示の意味が
     /// ばらけないよう、判定はここだけに置く。
@@ -128,11 +132,33 @@ struct NotchContentView: View {
         }
     }
 
-    /// Usage is the resting state here; a pending approval is urgent enough to
-    /// take the slot until it is answered.
+    /// Usage is the resting state here. Everything else takes the slot in the
+    /// order of how stuck the session is: an approval is blocked on us, a
+    /// notice is blocked on the terminal, a finished run is only news.
     private var rightWing: some View {
         HStack(spacing: 4) {
-            if approvals.pending.isEmpty {
+            if hasApproval {
+                WingBadge(
+                    symbol: "exclamationmark.shield.fill",
+                    text: approvals.pending.count > 1 ? "承認 \(approvals.pending.count)" : "承認",
+                    tint: .yellow
+                )
+                .transition(.scale(scale: 0.7).combined(with: .opacity))
+            } else if hasNotice {
+                WingBadge(
+                    symbol: "bell.badge.fill",
+                    text: notices.notices.count > 1 ? "要応答 \(notices.notices.count)" : "要応答",
+                    tint: AgentBrand.amber
+                )
+                .transition(.scale(scale: 0.7).combined(with: .opacity))
+            } else if !alerts.recentlyFinished.isEmpty {
+                WingBadge(
+                    symbol: "checkmark.circle.fill",
+                    text: alerts.recentlyFinished.count > 1 ? "完了 \(alerts.recentlyFinished.count)" : "完了",
+                    tint: AgentBrand.accent
+                )
+                .transition(.scale(scale: 0.7).combined(with: .opacity))
+            } else {
                 Group {
                     if showsUsage {
                         UsageWingView(snapshot: usage.snapshot)
@@ -141,12 +167,11 @@ struct NotchContentView: View {
                     }
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
-            } else {
-                ApprovalBadge(count: approvals.pending.count)
-                    .transition(.scale(scale: 0.7).combined(with: .opacity))
             }
         }
         .animation(Motion.quick, value: approvals.pending.count)
+        .animation(Motion.quick, value: notices.notices.count)
+        .animation(Motion.quick, value: alerts.recentlyFinished.count)
     }
 
     // MARK: - Expanded
@@ -162,6 +187,33 @@ struct NotchContentView: View {
                     .transition(.opacity.combined(with: .offset(y: -8)))
             }
 
+            // 承認と違って画面を占領させない。答えるのはターミナルなので、
+            // どの子画面を見ていても目に入る位置に置いておくだけでよい。
+            if approvals.pending.isEmpty, !notices.notices.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(notices.notices) { notice in
+                        NoticeBanner(
+                            notice: notice,
+                            onReveal: monitor.sessions
+                                .first { $0.sessionId == notice.sessionId }
+                                .map { session in
+                                    {
+                                        TerminalLocator.reveal(
+                                            pid: session.pid,
+                                            title: summaries.summaries[session.sessionId]?.title
+                                        )
+                                        notices.dismiss(notice)
+                                    }
+                                },
+                            onDismiss: { notices.dismiss(notice) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .transition(.opacity.combined(with: .offset(y: -8)))
+            }
+
             // 一覧 → 詳細は右から、戻るときは左から。どこへ移動したのかが
             // アニメーションの向きで分かるようにしている。
             Group {
@@ -173,7 +225,14 @@ struct NotchContentView: View {
                         onAlwaysAllow: { approvals.allowAlways(pending, rule: $0) },
                         onReveal: monitor.sessions
                             .first { $0.sessionId == pending.request.sessionId }
-                            .map { session in { TerminalLocator.reveal(pid: session.pid) } }
+                            .map { session in
+                                {
+                                    TerminalLocator.reveal(
+                                        pid: session.pid,
+                                        title: summaries.summaries[session.sessionId]?.title
+                                    )
+                                }
+                            }
                     )
                     .id(pending.id)
                     .transition(.scale(scale: 0.94).combined(with: .opacity))
@@ -209,6 +268,7 @@ struct NotchContentView: View {
             .animation(Motion.navigate, value: approvals.pending.first?.id)
         }
         .padding(.bottom, 14)
+        .animation(Motion.quick, value: notices.notices.map(\.id))
     }
 
     private var sessionList: some View {
@@ -279,7 +339,12 @@ struct NotchContentView: View {
                                     session: session,
                                     summary: summaries.summaries[session.sessionId],
                                     showsCost: settings.showCostEstimates,
-                                    onReveal: { TerminalLocator.reveal(pid: session.pid) }
+                                    onReveal: {
+                                        TerminalLocator.reveal(
+                                            pid: session.pid,
+                                            title: summaries.summaries[session.sessionId]?.title
+                                        )
+                                    }
                                 )
                             }
                             .buttonStyle(PressableButtonStyle(scale: 0.98))
@@ -311,28 +376,31 @@ struct NotchContentView: View {
     }
 }
 
-/// 承認待ちのバッジ。折りたたみ時のウィングに出る。
+/// 折りたたみ時の右ウィングに出るバッジ。承認・応答待ち・完了で色と字だけが
+/// 変わる。
 ///
 /// 明滅させるのは左ウィングのマーク側（CoreAnimation）。ここまで
-/// SwiftUI で動かすと、承認待ちのあいだずっと毎フレームのレイアウトが
+/// SwiftUI で動かすと、待っているあいだずっと毎フレームのレイアウトが
 /// 走ってしまう。
-private struct ApprovalBadge: View {
-    let count: Int
+private struct WingBadge: View {
+    let symbol: String
+    let text: String
+    let tint: Color
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "exclamationmark.shield.fill")
+            Image(systemName: symbol)
                 .font(.system(size: 10))
                 .symbolRenderingMode(.hierarchical)
-            Text(count > 1 ? "承認 \(count)" : "承認")
+            Text(text)
                 .font(.system(size: 10, weight: .bold))
                 .rollingNumber()
         }
-        .foregroundStyle(.yellow)
+        .foregroundStyle(tint)
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
-        .background(Capsule().fill(Color.yellow.opacity(0.16)))
-        .shadow(color: .yellow.opacity(0.35), radius: 4)
+        .background(Capsule().fill(tint.opacity(0.16)))
+        .shadow(color: tint.opacity(0.35), radius: 4)
     }
 }
 

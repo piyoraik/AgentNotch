@@ -6,6 +6,8 @@ final class NotchWindowController: NSWindowController {
     private let monitor: SessionMonitor
     private let summaries: SummaryStore
     private let approvals: ApprovalStore
+    private let notices: NoticeStore
+    private let alerts: AlertCenter
     private let usage: UsageStore
     private let settings: AppSettings
     private let uiState = NotchUIState()
@@ -23,12 +25,16 @@ final class NotchWindowController: NSWindowController {
         monitor: SessionMonitor,
         summaries: SummaryStore,
         approvals: ApprovalStore,
+        notices: NoticeStore,
+        alerts: AlertCenter,
         usage: UsageStore,
         settings: AppSettings = .shared
     ) {
         self.monitor = monitor
         self.summaries = summaries
         self.approvals = approvals
+        self.notices = notices
+        self.alerts = alerts
         self.usage = usage
         self.settings = settings
         let panel = NotchWindow(contentRect: .zero)
@@ -112,6 +118,8 @@ final class NotchWindowController: NSWindowController {
             transcripts: transcripts,
             summaries: summaries,
             approvals: approvals,
+            notices: notices,
+            alerts: alerts,
             usage: usage,
             settings: settings,
             notchWidth: geometry.hasNotch ? geometry.notchWidth : 0,

@@ -17,7 +17,10 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "一般"
         case .display: return "表示"
         case .menuBar: return "メニューバー"
-        case .approval: return "承認"
+        // rawValue は "approval" のまま。承認だけでなく、完了と応答待ちも
+        // ここに集まっているので表示だけ「通知」にしてある（永続化されるのは
+        // rawValue なので、既存の `lastSettingsPane` はそのまま効く）。
+        case .approval: return "通知"
         // 「更新」だけだとソフトウェアアップデートに読める。ここで設定するのは
         // ファイルとレート制限をどれくらいの間隔で読み直すか。
         case .dataRefresh: return "データ更新"
@@ -29,7 +32,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .display: return "macwindow"
         case .menuBar: return "menubar.rectangle"
-        case .approval: return "checkmark.shield"
+        case .approval: return "bell.badge"
         case .dataRefresh: return "arrow.clockwise"
         }
     }
@@ -41,18 +44,18 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: return 340
         case .display: return 620
         case .menuBar: return 300
-        case .approval: return 300
+        case .approval: return 700
         case .dataRefresh: return 500
         }
     }
 
     @ViewBuilder
-    func view(settings: AppSettings, updates: UpdateStore) -> some View {
+    func view(settings: AppSettings, updates: UpdateStore, hooks: HookInstaller) -> some View {
         switch self {
         case .general: GeneralSettingsView(settings: settings, updates: updates)
         case .display: DisplaySettingsView(settings: settings)
         case .menuBar: MenuBarSettingsView(settings: settings)
-        case .approval: ApprovalSettingsView(settings: settings)
+        case .approval: NotificationSettingsView(settings: settings, hooks: hooks)
         case .dataRefresh: RefreshSettingsView(settings: settings)
         }
     }
@@ -212,35 +215,207 @@ private struct RefreshSettingsView: View {
     }
 }
 
-// MARK: - 承認
+// MARK: - 通知
 
-private struct ApprovalSettingsView: View {
+/// 承認・完了・応答待ちの三つと、それを届けるフックの状態。どれも「セッションに
+/// 呼ばれたときどうするか」なので一枚にまとめてある。
+private struct NotificationSettingsView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var hooks: HookInstaller
 
     /// A short, non-alarming subset of the system sounds.
-    private static let sounds = ["Ping", "Glass", "Pop", "Submarine", "Tink", "Funk"]
+    static let sounds = ["Ping", "Glass", "Pop", "Submarine", "Tink", "Funk"]
 
     var body: some View {
         Form {
+            HookSection(hooks: hooks)
+
             Section {
                 Toggle("承認待ちになったらパネルを自動で開く", isOn: $settings.autoOpenOnApproval)
                 Toggle("Dock アイコンで注意を促す", isOn: $settings.bounceOnApproval)
                 Toggle("サウンドを鳴らす", isOn: $settings.playSoundOnApproval)
-                Picker("サウンド", selection: $settings.approvalSoundName) {
-                    ForEach(Self.sounds, id: \.self) { name in
-                        Text(name).tag(name)
-                    }
-                }
-                .disabled(!settings.playSoundOnApproval)
-                .onChange(of: settings.approvalSoundName) { _, name in
-                    NSSound(named: name)?.play()
-                }
+                SoundPicker(selection: $settings.approvalSoundName)
+                    .disabled(!settings.playSoundOnApproval)
+            } header: {
+                Text("承認")
             } footer: {
                 Text("自動で開かない設定でも、承認待ちの間はノッチに「承認」と表示されます。")
                     .settingsFootnote()
             }
+
+            Section {
+                Toggle("作業が終わったら知らせる", isOn: $settings.notifyOnCompletion)
+                Toggle("サウンドを鳴らす", isOn: $settings.playSoundOnCompletion)
+                    .disabled(!settings.notifyOnCompletion)
+                SoundPicker(selection: $settings.completionSoundName)
+                    .disabled(!settings.notifyOnCompletion || !settings.playSoundOnCompletion)
+                SliderRow(
+                    title: "知らせる最短の作業時間",
+                    value: $settings.completionMinimumSeconds,
+                    range: 0...120,
+                    step: 5,
+                    format: { $0 == 0 ? "すべて" : "\(Int($0)) 秒" }
+                )
+                .disabled(!settings.notifyOnCompletion)
+            } header: {
+                Text("作業の完了")
+            } footer: {
+                Text("実行中だったセッションが待機に戻ったら知らせます。フックの登録は不要です。すぐ返ってきた作業まで鳴らすとうるさいので、既定では 15 秒以上かかったものだけが対象です。")
+                    .settingsFootnote()
+            }
+
+            Section {
+                Toggle("ターミナルでの応答待ちを知らせる", isOn: $settings.notifyOnWaiting)
+                Toggle("サウンドを鳴らす", isOn: $settings.playSoundOnWaiting)
+                    .disabled(!settings.notifyOnWaiting)
+            } header: {
+                Text("応答待ち")
+            } footer: {
+                Text("プランの承認や選択肢の質問はフックでは応答できません。これらはノッチに「要応答」とだけ出るので、ターミナルへ移動して答えてください。Notification フックの登録が要ります。")
+                    .settingsFootnote()
+            }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// フックの配置状態と、その場で直すためのボタン。README を見ながら `cp` と
+/// `settings.json` の手編集をやる代わりがここ。
+private struct HookSection: View {
+    @ObservedObject var hooks: HookInstaller
+    @State private var isConfirmingUninstall = false
+
+    var body: some View {
+        Section {
+            LabeledContent("ブリッジ") {
+                StatusLabel(text: bridgeText, tone: bridgeTone)
+            }
+            LabeledContent("承認フック") {
+                StatusLabel(text: text(for: hooks.health.permission), tone: tone(for: hooks.health.permission))
+            }
+            LabeledContent("通知フック") {
+                StatusLabel(text: text(for: hooks.health.notification), tone: tone(for: hooks.health.notification))
+            }
+
+            HStack {
+                Button(hooks.health.isReady ? "登録し直す" : "セットアップ") { hooks.install() }
+                    .disabled(hooks.health.bridge == .unavailable)
+                if hooks.health.permission != .missing || hooks.health.notification != .missing {
+                    Button("解除") { isConfirmingUninstall = true }
+                }
+                Spacer()
+                Button("再確認") { hooks.refresh() }
+            }
+        } header: {
+            Text("フック")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                if let error = hooks.lastError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+                if let backup = hooks.lastBackup {
+                    Text("settings.json を \(backup) に控えました。")
+                        .settingsFootnote()
+                }
+                Text("~/.claude/settings.json にブリッジを登録します。書き換える前に必ずバックアップを取りますが、整形は失われます。ブリッジはアプリの外（~/Library/Application Support/AgentNotch/bin）に置くので、アプリを移動してもフックは壊れません。")
+                    .settingsFootnote()
+            }
+        }
+        .confirmationDialog(
+            "AgentNotch のフックを settings.json から外しますか？",
+            isPresented: $isConfirmingUninstall,
+            titleVisibility: .visible
+        ) {
+            Button("解除", role: .destructive) { hooks.uninstall() }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("承認はターミナルに戻ります。ブリッジのファイルはそのまま残ります。")
+        }
+    }
+
+    private var bridgeText: String {
+        switch hooks.health.bridge {
+        case .missing: return "未配置"
+        case .outdated: return "更新が必要"
+        case .current: return "配置済み"
+        case .unavailable: return "アプリに同梱されていません"
+        }
+    }
+
+    private var bridgeTone: StatusLabel.Tone {
+        switch hooks.health.bridge {
+        case .current: return .ok
+        case .outdated: return .warning
+        case .missing: return .neutral
+        case .unavailable: return .warning
+        }
+    }
+
+    private func text(for state: HookInstaller.Registration) -> String {
+        switch state {
+        case .missing: return "未登録"
+        case .registered: return "登録済み"
+        case .elsewhere: return "別のパスを指しています"
+        case .unreadable: return "settings.json を読めません"
+        }
+    }
+
+    private func tone(for state: HookInstaller.Registration) -> StatusLabel.Tone {
+        switch state {
+        case .registered: return .ok
+        case .missing: return .neutral
+        case .elsewhere, .unreadable: return .warning
+        }
+    }
+}
+
+private struct StatusLabel: View {
+    enum Tone { case ok, warning, neutral }
+
+    let text: String
+    let tone: Tone
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.caption)
+            Text(text)
+        }
+        .foregroundStyle(color)
+    }
+
+    private var symbol: String {
+        switch tone {
+        case .ok: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .neutral: return "circle.dashed"
+        }
+    }
+
+    private var color: Color {
+        switch tone {
+        case .ok: return .green
+        case .warning: return .orange
+        case .neutral: return .secondary
+        }
+    }
+}
+
+/// 選んだ音をその場で鳴らす。文字だけでは選べない。
+private struct SoundPicker: View {
+    @Binding var selection: String
+
+    var body: some View {
+        Picker("サウンド", selection: $selection) {
+            ForEach(NotificationSettingsView.sounds, id: \.self) { name in
+                Text(name).tag(name)
+            }
+        }
+        .onChange(of: selection) { _, name in
+            NSSound(named: name)?.play()
+        }
     }
 }
 

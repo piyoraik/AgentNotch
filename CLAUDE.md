@@ -182,6 +182,16 @@ python3 Design/generate-icon.py
 
 **UI を全部隠せる状態を作らない。** メニューバーアイコンとノッチパネルは個別に非表示にできるが、両方消しても `applicationShouldHandleReopen` で設定ウィンドウに戻れる。承認待ちが発生したときは `showNotchPanel` が false でもパネルを前面に出す（`NotchWindowController` の `approvals.$pending` 監視）。ブロックされたセッションに応答できない状態を作らないため。
 
+**前面に出させるのは承認だけ。** 完了と応答待ちは音とバッジまで。パネルを勝手に前に出す権利があるのは「こちらが答えないと止まったまま」のものだけで、それを広げると通知のたびに作業中の画面が覆われる。
+
+**ユーザーを突つくのは `AlertCenter` 一箇所。** 音と Dock の注意喚起は承認・完了・応答待ちの 3 つから出るが、鳴らす判断はここに集める。各ストアが自前で鳴らすと、設定の効き方と回数がすぐ食い違う。ストアは「起きたこと」だけを流す。
+
+**完了は「生きているセッションが busy → idle」だけ。** `SessionMonitor.detectFinished` は一覧に残っているセッションしか見ない。busy のまま消えたのは端末ごと閉じられたということで、終わったのではない。ここを「消えた＝完了」に広げない。承認待ちで止まっているセッション（`ApprovalStore.isBlocked`）も完了にしない。
+
+**応答待ちの通知は承認と二重にしない。** 権限プロンプトでは CLI 自身の `Notification` も飛ぶ。`NoticeStore` は 1.5 秒置いてから、そのセッションに承認パネルが出ていないときだけ出す。この待ちを削ると、同じ 1 件で承認パネルと「要応答」が両方出る。
+
+**通知を消す判断に `status` を使わない。** CLI がターミナル側のプロンプトを待っている間に何を書くかは未確認なので、`NoticeStore.reconcile` は**トランスクリプトが通知の時刻より先に進んだか**で判断する。busy を「答えた」と読むと、出た瞬間に消える可能性がある。
+
 ## Swift 6 concurrency の扱い
 
 strict concurrency が有効なため、以下の型を踏襲する。
@@ -207,9 +217,16 @@ strict concurrency が有効なため、以下の型を踏襲する。
   - `selectedItemIdentifier` は立てない。立てるとツールバーが選択のピルを**セル基準**（セル内 `y 8..56`）に描くが、項目のビューは `y 10..57` に引き伸ばされて置かれるため、アイコンとラベルの塊とピルの中心が 1.5pt ずれる。ピルは自分の bounds を上下対称に詰めて描き、内容と同心にする。
   - 高さの要求は通らない（セルの空きに合わせて 47pt になる）。それでも要求しないと内容ぴったりの 32pt しか渡らないので、上下の余白まで押せるようにセルより大きい値を返しておく。
 
-## 承認プロトコル
+## フックのプロトコル
 
-ソケットは `~/Library/Application Support/AgentNotch/approvals.sock`。改行区切り JSON で 1 往復する。
+ソケットは `~/Library/Application Support/AgentNotch/approvals.sock`。改行区切り JSON で 1 往復する。**このパス名を変えない。** 古い版が配置したブリッジのコピーにこのパスが焼き込まれており、名前を変えるとアプリを更新した人のフックが黙って外れる。
+
+同じブリッジが 2 つのイベントを受け、`hook_event_name` で分ける（ブリッジ側と `HookServer.serve` の両方）。
+
+| イベント | 往復 | 用途 |
+| --- | --- | --- |
+| `PermissionRequest` | 応答を待つ（120 秒） | ツールの許可 / 拒否 |
+| `Notification` | 応答を待たない | 応答待ちの通知。実測 30ms で抜ける |
 
 ```
 bridge → app   フックの stdin をそのまま + "\n"
@@ -217,7 +234,9 @@ app → bridge   {"behavior":"allow"} または {"behavior":"deny"} + "\n"
                無応答で閉じた場合はターミナルに委譲
 ```
 
-ブリッジは応答を 120 秒待つ。フック側の `timeout` はこれより長くしておくこと（150 秒程度）。
+ブリッジは `PermissionRequest` の応答を 120 秒待つ。フック側の `timeout` はこれより長くしておくこと（150 秒程度）。
+
+**知らない `hook_event_name` は `PermissionRequest` として扱う。** 待たなくていいものを待つと 1 回分のフックを無駄にするだけだが、待つべきものを待たないとユーザーの答えが捨てられる。
 
 承認待ちの間はパネルを閉じさせない（`NotchWindowController` のクリック監視が `approvals.pending` を見ている）。セッションがブロックされたまま UI が消えると復帰手段がなくなるため。
 
@@ -245,6 +264,19 @@ tool_name / tool_input / permission_suggestions
 
 - セッションのモード変更（`acceptEdits` など）。「そのツールを常に許可」で代替するしかない。
 - 拒否理由を Claude に伝える経路は**未確認**。`additionalContext` / `reason` / `systemMessage` のどれが効くかは実機検証が要る。承認要求を出さない権限モードのセッションからは検証できない点に注意。
+- `Notification` には**何も返せない**。プラン承認や `AskUserQuestion` はこの経路でしか気付けず、答えるのはターミナルになる。`NoticeBanner` に許可 / 拒否のボタンを付けない。押せそうに見えるものが効かないほうが、何も無いより悪い。
+
+### フックの配置
+
+`HookInstaller` がブリッジのコピーと `~/.claude/settings.json` への登録を行う（設定の「通知」ペイン）。
+
+**`settings.json` はバックアップを取ってから書き換える。** 他人のファイルであり、こちらと無関係な設定が入っている。`JSONSerialization` で書き戻すため整形は失われる。このマシンでは AgentPeek と codeisland のフックが同じイベントに載っているので、**自分のエントリだけを足し引きする**（`agentnotch-bridge` を含むコマンドで判定）。全体を置き換えない。
+
+**勝手に登録しない。押されたときだけ登録する。** 例外は `refreshInstalledBridge()` で、これは**既に置いてあるブリッジが古いときだけ**配置し直す。フックが既に自分を指している以上、アプリを更新した側の都合で噛み合わなくなるのを放置するほうが不親切なため。無ければ何もしない。
+
+**DerivedData から動いているビルドはブリッジを触らない。** 自動更新と同じ理由。開発ビルドを 1 分動かしただけで、そのあとのマシンの挙動が変わってはいけない。設定ペインのボタンは開発ビルドでも効く（押したのはユーザーなので）。
+
+ブリッジが最新かどうかは**中身の SHA-256 で比べる**。ブリッジはバージョンを名乗らない素の CLI なので、聞きたいことは「同じバイナリか」そのもの。
 
 ## 常に許可
 
@@ -267,8 +299,9 @@ tool_name / tool_input / permission_suggestions
 ```
 Sources/Bridge/            フックから起動される CLI。依存なしの POSIX ソケット
 Sources/AgentNotch/
-  Models/                  ClaudeSession, SessionDetail, ApprovalRequest, UsageSnapshot
-  Services/                ファイル監視・パース・ソケットサーバ・端末特定・設定
+  Models/                  ClaudeSession, SessionDetail, ApprovalRequest, AgentNotice, UsageSnapshot
+  Services/                ファイル監視・パース・ソケットサーバ（HookServer）・フックの配置
+                           （HookInstaller）・通知の一元管理（AlertCenter）・端末特定・設定
   Views/                   SwiftUI。NotchContentView が折りたたみ/展開を切り替える
   Windows/                 NSPanel・設定ウィンドウ・メニューバー。AppKit 側の器
 Design/                    アイコンの生成スクリプトと生成された SVG
@@ -285,6 +318,8 @@ Resources/
 
 承認機能は `~/.claude/settings.json` の `PermissionRequest` にフック登録済みで、実機で往復を確認してある（手順は README）。設定ファイルを編集するときは必ずバックアップを取る。
 
-このマシンには AgentPeek と codeisland のフックも同じイベントに載っている。同一イベントのフックは並行実行されるので、複数が決定を返したときの優先順位は未確認。
+`Notification` は**まだ登録していない**（設定の「通知」→「セットアップ」で入る）。ソケット越しの受け取りだけは実機で確認済み: 通知のペイロードを流すとブリッジは 30ms・終了コード 0・stdout 空で抜け、アプリ側は応答を書かずに閉じる。ノッチに「要応答」が出るところの目視だけが残っている。
+
+このマシンには AgentPeek と codeisland のフックも同じイベントに載っている（`Notification` にも両方いる）。同一イベントのフックは並行実行されるので、複数が決定を返したときの優先順位は未確認。
 
 拒否理由の伝達だけ未検証のまま残っている。検証するときは、合言葉を含む入力のときだけ拒否を返す一時フックを足し、**承認プロンプトが実際に出るセッション**から叩く。権限モードによっては `PermissionRequest` 自体が発生せず、いくら実行しても再現しない。検証用フックは他セッションの入力も受け取るので、終わったら必ず外してログを消す。
