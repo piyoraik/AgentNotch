@@ -146,6 +146,14 @@ python3 Design/generate-icon.py
 
 **ファイル読み込みは mtime でガードする。** `SummaryStore` と `TranscriptStore` は更新日時が変わったときだけ再パースする。毎秒の再読み込みはしない。
 
+**`NSAppleScript` はメインスレッドでしか実行しない。** `TerminalLocator.apply` の話。AppleScript は Apple Event の返事を**呼び出したスレッドで Carbon のイベントループを回して**待つ（`UASRemoteSend` → `AEDefaultActiveProc` → `GetNextEventMatchingMask`）が、返事はメインスレッドのイベントキューに届く。バックグラウンドから呼ぶと**たまに成功し、それ以外は永久にブロックする**。専用キューでやると 1 回詰まっただけで以降の `reveal` が全部その後ろで止まる。`ps` の fork だけをキューに逃がし、AppleScript は `DispatchQueue.main.async` で戻してから叩く。実測は 1 往復 90ms（初回 350ms）。
+
+**Ghostty には `tty` が無い。** iTerm2 と Terminal はタブの `tty` で claude の pid と一意に結び付くが、Ghostty の scripting dictionary（`Ghostty.app/Contents/Resources/Ghostty.sdef`、1.3.1 で追加）が surface について出すのは `id` / `name`（タイトル）/ `working directory` だけ。pid も tty も無く、シェルの環境変数にも surface を指す値は入らない。そのため `TerminalLocator.revealGhostty` は **cwd で絞ってタイトルで決める**。cwd は OSC 7 でシェルが報告した値なので `proc_pidinfo` 側（解決済みパス）と揃えてから比べる。タイトルは Claude Code が書く `ai-title` で、先頭にその時々のスピナー（`⠐ ` `✳ `）が付くので装飾を落としてから比較する。
+
+**絞りきれないときの Ghostty は、タブを動かさない。** 同じリポジトリで複数セッションを開くのは普通なので、cwd だけでは決まらないのが通常運転（実測でこのマシンは同一ディレクトリに 5 本）。候補が 2 つ以上残ったら `focus` を投げずに諦める。アプリは前面に出ているので、**間違ったタブに飛ばすほうが、どのタブにも飛ばないより悪い**。ここを「とりあえず先頭」に変えない。
+
+**Ghostty の `focus` はウィンドウを前に出してタブも選ぶ。** iTerm2 のように `select w` → `select t` → `select s` と辿る必要はない。surface は `first terminal whose id is "…"` で引く。
+
 **トランスクリプトをメインスレッドで読まない。** 実測でセッション 1 本あたり 1.6MB・全文パース 17ms。これをメインスレッドで 2 秒ごとに回していたためパネルのアニメーションが引っかかっていた。`SummaryStore` / `TranscriptStore` は専用の `DispatchQueue` で読み、結果だけ main に戻す。
 
 **要約は差分だけ読む。** `TranscriptReader.scanSummary(from:resuming:)` が前回のバイトオフセットから追記分だけを読む（1 ティック 0.14ms）。追記途中の行は最後の改行までで切って次回に回し、ファイルが縮んでいたら（コンパクション）先頭から読み直す。`loadSummary` は全文版のままだが、ポーリング経路では使わない。

@@ -124,7 +124,7 @@ final class StatusItemController: NSObject {
                     keyEquivalent: ""
                 )
                 item.target = self
-                item.representedObject = session.pid
+                item.representedObject = RevealTarget(pid: session.pid, title: summary?.title)
                 if let summary, settings.showSessionTitlesInMenu {
                     let context = SessionSummary.abbreviate(summary.contextTokens)
                     let output = SessionSummary.abbreviate(summary.outputTokens)
@@ -191,9 +191,16 @@ final class StatusItemController: NSObject {
         }
     }
 
+    /// The title rides along because emulators without a `tty` property
+    /// (Ghostty) need it to tell two sessions in one directory apart.
+    private struct RevealTarget {
+        let pid: Int32
+        let title: String?
+    }
+
     @objc private func revealSession(_ sender: NSMenuItem) {
-        guard let pid = sender.representedObject as? Int32 else { return }
-        TerminalLocator.reveal(pid: pid)
+        guard let target = sender.representedObject as? RevealTarget else { return }
+        TerminalLocator.reveal(pid: target.pid, title: target.title)
     }
 
     /// パネルをレポート画面で開く。

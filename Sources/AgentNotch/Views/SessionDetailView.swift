@@ -89,7 +89,7 @@ struct SessionDetailView: View {
                 Spacer()
 
                 Button {
-                    TerminalLocator.reveal(pid: session.pid)
+                    TerminalLocator.reveal(pid: session.pid, title: detail?.title)
                 } label: {
                     Image(systemName: "terminal")
                         .font(.system(size: 11, weight: .semibold))
