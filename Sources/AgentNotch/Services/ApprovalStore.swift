@@ -21,6 +21,10 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var pending: [Pending] = []
 
     private let alwaysAllow: AlwaysAllowStore
+    /// Session id → when this store last answered a permission for it. Owned by
+    /// main. Kept because a request that a standing rule allows never becomes
+    /// `pending`, so "is this session blocked" can't see it at all.
+    private var lastDecisionAt: [String: Date] = [:]
 
     init(alwaysAllow: AlwaysAllowStore = .shared) {
         self.alwaysAllow = alwaysAllow
@@ -36,6 +40,7 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
 
             // A standing approval answers silently: no panel, no alert.
             if self.alwaysAllow.allows(request) {
+                self.lastDecisionAt[request.sessionId] = Date()
                 respond(.allow)
                 return
             }
@@ -46,6 +51,7 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
 
     func resolve(_ pending: Pending, with decision: ApprovalDecision) {
         self.pending.removeAll { $0.id == pending.id }
+        lastDecisionAt[pending.request.sessionId] = Date()
         pending.respond(decision)
     }
 
@@ -61,5 +67,17 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
     /// a notice about a question the user is already looking at is noise.
     func isBlocked(sessionId: String) -> Bool {
         pending.contains { $0.request.sessionId == sessionId }
+    }
+
+    /// Whether this store has just answered a permission for the session.
+    ///
+    /// The CLI's `Notification` about a permission arrives alongside the
+    /// `PermissionRequest` we answer ourselves, so by the time the notice is
+    /// ready to show there may be nothing pending and nothing waiting in the
+    /// terminal either — the session took the answer and carried on. A notice
+    /// then points at a session that isn't asking anything.
+    func answeredRecently(sessionId: String, within window: TimeInterval) -> Bool {
+        guard let last = lastDecisionAt[sessionId] else { return false }
+        return Date().timeIntervalSince(last) <= window
     }
 }

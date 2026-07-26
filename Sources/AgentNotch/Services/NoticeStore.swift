@@ -12,11 +12,19 @@ import Foundation
 final class NoticeStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var notices: [AgentNotice] = []
 
-    /// How long to sit on a freshly arrived notice before showing it. The CLI
-    /// fires `Notification` for its own permission prompt as well, and that can
-    /// beat our `PermissionRequest` round trip by a hair; waiting a moment lets
-    /// the approval panel claim the session first and this one stay quiet.
-    private static let settleDelay: TimeInterval = 1.5
+    /// How long to sit on a freshly arrived notice before showing it.
+    ///
+    /// The CLI fires `Notification` for a permission it is about to ask for,
+    /// which is the same thing `PermissionRequest` is asking us — and we may
+    /// answer it, from the panel or from a standing rule, before the terminal
+    /// ever shows anything. Waiting gives the session time to take that answer
+    /// and carry on, which is what the checks in `receive` look for. Being a
+    /// few seconds late to a real one costs nothing; the user is walking back
+    /// to the terminal either way.
+    private static let settleDelay: TimeInterval = 5
+    /// How long after we answer a permission a notice is still assumed to be
+    /// about that same permission.
+    private static let decisionWindow: TimeInterval = 20
     /// A notice nobody acted on shouldn't sit in the panel for the rest of the
     /// day. Answering in the terminal usually clears it long before this.
     private static let lifetime: TimeInterval = 300
@@ -35,6 +43,12 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
     private var cancellables = Set<AnyCancellable>()
     /// Session id → when it was last seen working. Owned by main.
     private var lastActiveAt: [String: Date] = [:]
+    /// Session id → timestamp of the newest transcript entry seen. Owned by
+    /// main, refreshed from every summary pass.
+    private var transcriptActivity: [String: Date] = [:]
+    /// Sessions whose turn we have already called finished, until they pick up
+    /// work again. Owned by main.
+    private var finishedSessions: Set<String> = []
 
     init(
         monitor: SessionMonitor,
@@ -59,6 +73,7 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
         monitor.finished
             .sink { [weak self] finish in
                 self?.lastActiveAt[finish.sessionId] = finish.finishedAt
+                self?.finishedSessions.insert(finish.sessionId)
             }
             .store(in: &cancellables)
 
@@ -77,9 +92,23 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
             guard let self, self.settings.notifyOnWaiting else { return }
             // The same question is already on screen with buttons under it.
             guard !self.approvals.isBlocked(sessionId: notice.sessionId) else { return }
+            // Or it was on screen, or a standing rule took it, and the session
+            // already has its answer. Nothing is waiting in the terminal.
+            guard !self.approvals.answeredRecently(
+                sessionId: notice.sessionId,
+                within: Self.decisionWindow
+            ) else { return }
             // A session that hasn't done anything in minutes isn't stuck on a
             // question; it is just open. Saying so every minute is noise.
             guard self.wasRecentlyActive(notice.sessionId) else { return }
+            // Its turn ended cleanly and we already said so. The CLI nudges
+            // about sessions left sitting at the prompt, and "you have the
+            // ball" is not worth saying twice in two different ways.
+            guard !self.finishedSessions.contains(notice.sessionId) else { return }
+            // And if it has written anything since the notice arrived, it kept
+            // going on its own. Whatever the notification was about, it isn't
+            // holding the session up.
+            guard !self.hasMovedOn(notice) else { return }
 
             self.notices.removeAll { $0.id == notice.id }
             self.notices.append(notice)
@@ -103,6 +132,16 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
         return Date().timeIntervalSince(last) <= Self.activeWindow
     }
 
+    /// Whether the session has written to its transcript since the notice
+    /// arrived — the one signal that says the session carried on by itself.
+    ///
+    /// The entry that prompted the notification is written before it, so a
+    /// session that really is stuck leaves nothing newer behind.
+    private func hasMovedOn(_ notice: AgentNotice) -> Bool {
+        guard let activity = transcriptActivity[notice.sessionId] else { return false }
+        return activity > notice.receivedAt
+    }
+
     /// Drops notices whose session has moved on.
     ///
     /// Progress is judged by the transcript growing past the moment the notice
@@ -113,16 +152,29 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
         let now = Date()
         for session in sessions where session.isWorking {
             lastActiveAt[session.sessionId] = now
+            // Working again: whatever it does next is a fresh turn.
+            finishedSessions.remove(session.sessionId)
+        }
+        // Kept for `hasMovedOn`, which runs when a notice is about to be shown
+        // rather than from here.
+        for (id, summary) in summaries {
+            if let activity = summary.lastActivity { transcriptActivity[id] = activity }
         }
         // Sessions that are gone can't be waiting on anything.
         lastActiveAt = lastActiveAt.filter { id, _ in
+            sessions.contains { $0.sessionId == id }
+        }
+        transcriptActivity = transcriptActivity.filter { id, _ in
+            sessions.contains { $0.sessionId == id }
+        }
+        finishedSessions = finishedSessions.filter { id in
             sessions.contains { $0.sessionId == id }
         }
 
         guard !notices.isEmpty else { return }
         notices.removeAll { notice in
             guard sessions.contains(where: { $0.sessionId == notice.sessionId }) else { return true }
-            if let activity = summaries[notice.sessionId]?.lastActivity, activity > notice.receivedAt {
+            if hasMovedOn(notice) {
                 return true
             }
             return now.timeIntervalSince(notice.receivedAt) > Self.lifetime
