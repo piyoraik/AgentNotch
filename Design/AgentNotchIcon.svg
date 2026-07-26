@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>AgentNotch</title>
+  <!-- 生成物。Design/generate-icon.py が書き出す。
+       メーターの円弧と瞳を重ねた形で、上の開口部がノッチ。欠けた輪が
+       「見張っている目」に見えるのを狙っている。
+       タイルは 1024 のうち 824（macOS の慣習どおり）。 -->
+  <defs>
+    <linearGradient id="tile" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#28304A"/>
+      <stop offset="1" stop-color="#0B0E16"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.24"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.02"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="512" cy="470" r="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5FE3CF" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#5FE3CF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="arc" x1="679.28" y1="326.21" x2="321.39" y2="673.76" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4A7CFF"/>
+      <stop offset="0.5" stop-color="#3FBFE8"/>
+      <stop offset="1" stop-color="#5FE3CF"/>
+    </linearGradient>
+    <linearGradient id="pupil" x1="416" y1="416" x2="608" y2="608" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5FE3CF"/>
+      <stop offset="1" stop-color="#4A7CFF"/>
+    </linearGradient>
+    <radialGradient id="pupilGlow" cx="512" cy="512" r="182.4" gradientUnits="userSpaceOnUse">
+      <stop offset="0.35" stop-color="#5FE3CF" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#5FE3CF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tileClip">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+  </defs>
+
+  <!-- タイル -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <g clip-path="url(#tileClip)">
+    <circle cx="512" cy="470" r="360" fill="url(#bloom)"/>
+  </g>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+
+  <!-- メーター。薄い輪が全体、明るい円弧が現在値 -->
+  <g fill="none">
+    <path d="M 679.28 326.21 A 250 250 0 1 1 344.72 326.21" stroke="#FFFFFF" stroke-opacity="0.13" stroke-width="108" stroke-linecap="round"/>
+    <path d="M 679.28 326.21 A 250 250 0 1 1 321.39 673.76" stroke="url(#arc)" stroke-width="108" stroke-linecap="round"/>
+  </g>
+
+  <!-- 現在値の先端 -->
+  <circle cx="321.39" cy="673.76" r="30" fill="#F4FFFB"/>
+
+  <!-- 瞳。わずかに光らせてタイルの上に浮かせる -->
+  <circle cx="512" cy="512" r="182.4" fill="url(#pupilGlow)"/>
+  <circle cx="512" cy="512" r="96" fill="url(#pupil)"/>
+</svg>

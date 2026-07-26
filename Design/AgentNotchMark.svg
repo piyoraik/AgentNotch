@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>AgentNotch mark</title>
+  <!-- 生成物。Design/generate-icon.py が書き出す。 -->
+  <defs>
+    <linearGradient id="markArc" x1="198.43" y1="49.77" x2="47.74" y2="196.11" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4A7CFF"/>
+      <stop offset="0.5" stop-color="#3FBFE8"/>
+      <stop offset="1" stop-color="#5FE3CF"/>
+    </linearGradient>
+  </defs>
+  <g fill="none">
+    <path d="M 198.43 49.77 A 105.26 105.26 0 1 1 57.57 49.77" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="45.47" stroke-linecap="round"/>
+    <path d="M 198.43 49.77 A 105.26 105.26 0 1 1 47.74 196.11" stroke="url(#markArc)" stroke-width="45.47" stroke-linecap="round"/>
+  </g>
+  <circle cx="47.74" cy="196.11" r="12.63" fill="#F2FFFC"/>
+  <circle cx="128" cy="128" r="40.42" fill="url(#markArc)"/>
+</svg>

@@ -1,8 +1,12 @@
-# ClaudeNotch
+<img src="Design/AgentNotchMark.svg" width="72" align="right" alt="">
+
+# AgentNotch
 
 Mac のノッチとメニューバーから Claude Code のセッションを監視し、承認に応答するためのネイティブ macOS アプリ。
 
 ターミナルで普段どおり `claude` を起動するだけで、実行中のセッション・トークン消費・レート制限の残量がノッチに表示され、ツールの承認要求をノッチから直接さばける。
+
+名前に Claude を含めていないのは、他のコーディングエージェントにも広げられるようにしてあるため。現時点で読んでいるのは Claude Code のファイルだけ。
 
 ## 必要環境
 
@@ -11,6 +15,8 @@ Mac のノッチとメニューバーから Claude Code のセッションを監
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）
 
 ノッチのある内蔵ディスプレイがなくても動作する。その場合はメニューバー中央に同等のピルを表示する。
+
+複数のディスプレイをつないでいるときは、設定の「表示」で表示先を選べる。既定ではノッチのある画面を自動で選ぶ。選んだディスプレイを外している間は自動選択に戻り、つなぎ直すと元の画面に戻る。
 
 ## 機能
 
@@ -57,34 +63,46 @@ Mac のノッチとメニューバーから Claude Code のセッションを監
 
 ### 設定
 
-メニューバーアイコン →**設定…**（`⌘,`）で開く。変更は即時に反映され、`UserDefaults`（`com.piyoraik.ClaudeNotch`）に保存される。ペインは `⌘1`〜`⌘5` でも切り替えられ、`⌘W` / `Esc` で閉じる。前回開いていたペインを覚える。
+メニューバーアイコン →**設定…**（`⌘,`）で開く。変更は即時に反映され、`UserDefaults`（`com.piyoraik.AgentNotch`）に保存される。ペインは `⌘1`〜`⌘5` でも切り替えられ、`⌘W` / `Esc` で閉じる。前回開いていたペインを覚える。
 
 | タブ | 変えられるもの |
 | --- | --- |
-| 表示 | ノッチパネルの表示 / ホバーで展開するか / 折りたたみ時のメーター / ウィングとパネルのサイズ |
-| メニューバー | アイコンの表示 / セッション数のバッジ / メニュー内の使用量とタイトル |
-| 更新 | セッション・要約・トランスクリプトのポーリング間隔、使用量の取得可否と間隔 |
-| 承認 | 承認待ちで自動的に開くか / Dock で注意を促すか / サウンド |
 | 一般 | ログイン時に起動、設定のリセット、終了 |
+| 表示 | ノッチパネルの表示 / ホバーで展開するか / 折りたたみ時のメーター / 推定コスト / 表示先のディスプレイ / ウィングとパネルのサイズ |
+| メニューバー | アイコンの表示 / セッション数のバッジ / メニュー内の使用量とタイトル |
+| 承認 | 承認待ちで自動的に開くか / Dock で注意を促すか / サウンド |
+| データ更新 | セッション・要約・トランスクリプトのポーリング間隔、使用量の取得可否と間隔 |
 
-ホバー展開をオフにすると、ノッチはクリックしたときだけ開く。メニューバーアイコンとノッチパネルを両方隠した場合でも、`open -a ClaudeNotch`（または Finder から再度起動）で設定ウィンドウが開く。
+ホバー展開をオフにすると、ノッチはクリックしたときだけ開く。メニューバーアイコンとノッチパネルを両方隠した場合でも、`open -a AgentNotch`（または Finder から再度起動）で設定ウィンドウが開く。
 
 ## ビルド
 
 ```bash
 xcodegen generate
-xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
+xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
   -configuration Debug -destination 'platform=macOS' build
 ```
 
 ビルド成果物は DerivedData に出る。パスは次のコマンドで得られる。
 
 ```bash
-xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
+xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
   -showBuildSettings 2>/dev/null | awk '/ BUILT_PRODUCTS_DIR /{print $3}'
 ```
 
-`open <上記パス>/ClaudeNotch.app` で起動する。Dock アイコンは出ない（`LSUIElement`）。**終了はメニューバーアイコン → 「ClaudeNotch を終了」**から行う。
+`open <上記パス>/AgentNotch.app` で起動する。Dock アイコンは出ない（`LSUIElement`）。**終了はメニューバーアイコン → 「AgentNotch を終了」**から行う。
+
+### アイコン
+
+アイコンは自前のもので、`Design/generate-icon.py` が SVG とアプリアイコンの PNG を書き出す。形を変えるときはスクリプトの定数を直して回す（SVG は生成物なので手で直しても上書きされる）。
+
+```bash
+python3 Design/generate-icon.py
+```
+
+ラスタライズに Chrome のヘッドレスを使うので、`/Applications/Google Chrome.app` が要る。アイコンを作り直さないなら不要。
+
+パネルの中で Claude Code を指しているマークだけは、Claude.app 同梱の公式トレイアイコンをそのまま使っている（`Resources/Assets.xcassets/ClaudeMark.imageset`）。アプリ自身のマーク（メニューバー・ノッチのピル・設定）とは別物。
 
 ## 承認機能のセットアップ
 
@@ -93,13 +111,13 @@ xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
 ### 1. ブリッジを配置
 
 ```bash
-xcodebuild -project ClaudeNotch.xcodeproj -scheme claudenotch-bridge \
+xcodebuild -project AgentNotch.xcodeproj -scheme agentnotch-bridge \
   -configuration Debug -destination 'platform=macOS' build
 
-mkdir -p ~/Library/Application\ Support/ClaudeNotch/bin
-cp "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme claudenotch-bridge \
-  -showBuildSettings 2>/dev/null | awk '/ BUILT_PRODUCTS_DIR /{print $3}')/claudenotch-bridge" \
-  ~/Library/Application\ Support/ClaudeNotch/bin/
+mkdir -p ~/Library/Application\ Support/AgentNotch/bin
+cp "$(xcodebuild -project AgentNotch.xcodeproj -scheme agentnotch-bridge \
+  -showBuildSettings 2>/dev/null | awk '/ BUILT_PRODUCTS_DIR /{print $3}')/agentnotch-bridge" \
+  ~/Library/Application\ Support/AgentNotch/bin/
 ```
 
 ### 2. フックを登録
@@ -114,7 +132,7 @@ cp "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme claudenotch-bridge \
         "hooks": [
           {
             "type": "command",
-            "command": "'/Users/<you>/Library/Application Support/ClaudeNotch/bin/claudenotch-bridge'",
+            "command": "'/Users/<you>/Library/Application Support/AgentNotch/bin/agentnotch-bridge'",
             "timeout": 150
           }
         ]
@@ -128,7 +146,7 @@ cp "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme claudenotch-bridge \
 
 ### フェイルセーフ
 
-ClaudeNotch が起動していない場合、ブリッジは **0.5 秒以内に終了コード 0・出力なし**で抜ける。これは「判断しない」と解釈され、通常どおりターミナルに承認プロンプトが出る。**アプリの不在や不具合でセッションがハングすることはない。**
+AgentNotch が起動していない場合、ブリッジは **0.5 秒以内に終了コード 0・出力なし**で抜ける。これは「判断しない」と解釈され、通常どおりターミナルに承認プロンプトが出る。**アプリの不在や不具合でセッションがハングすることはない。**
 
 ノッチ側で 120 秒応答がない場合も同様にターミナルへ委譲される。
 

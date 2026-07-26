@@ -2,13 +2,13 @@ import Darwin
 import Foundation
 
 // Invoked by Claude Code as a PermissionRequest hook. Forwards the request to
-// a running ClaudeNotch over a unix socket and relays the user's decision.
+// a running AgentNotch over a unix socket and relays the user's decision.
 //
 // Every failure path exits 0 with no stdout: that reads as "no decision", so
 // Claude Code falls back to its own terminal prompt. A hook that hangs or
 // errors loudly would wedge every session on the machine.
 
-let socketPath = NSString(string: "~/Library/Application Support/ClaudeNotch/approvals.sock")
+let socketPath = NSString(string: "~/Library/Application Support/AgentNotch/approvals.sock")
     .expandingTildeInPath
 
 /// Seconds to wait for the user to answer in the notch before handing the
