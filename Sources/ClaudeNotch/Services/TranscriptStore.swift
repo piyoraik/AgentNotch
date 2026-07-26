@@ -10,15 +10,25 @@ final class TranscriptStore: ObservableObject {
     private var url: URL?
     private var lastModified: Date?
     private var timer: Timer?
+    private var cancellable: AnyCancellable?
 
-    init() {
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
+    init(settings: AppSettings = .shared) {
+        cancellable = settings.$transcriptPollInterval
+            .removeDuplicates()
+            .sink { [weak self] interval in
+                self?.restartTimer(interval: interval)
+            }
     }
 
     deinit {
         timer?.invalidate()
+    }
+
+    private func restartTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: max(interval, 0.25), repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
     }
 
     func select(_ session: ClaudeSession?) {

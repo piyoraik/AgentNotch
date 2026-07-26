@@ -10,26 +10,53 @@ final class UsageStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var snapshot = UsageSnapshot()
 
     private static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    /// The windows move slowly and the endpoint is shared with the CLI; once a
-    /// minute is plenty.
-    private let interval: TimeInterval = 60
 
+    private let settings: AppSettings
     private var timer: Timer?
     private var isFetching = false
+    private var cancellables = Set<AnyCancellable>()
 
+    init(settings: AppSettings = .shared) {
+        self.settings = settings
+    }
+
+    /// The windows move slowly and the endpoint is shared with the CLI, so the
+    /// interval is user-tunable and defaults to once a minute.
     func start() {
-        fetch()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.fetch()
-        }
+        settings.$usageEnabled
+            .combineLatest(settings.$usageRefreshInterval)
+            .removeDuplicates { $0 == $1 }
+            .sink { [weak self] enabled, interval in
+                self?.reschedule(enabled: enabled, interval: interval)
+            }
+            .store(in: &cancellables)
     }
 
     deinit {
         timer?.invalidate()
     }
 
+    private func reschedule(enabled: Bool, interval: TimeInterval) {
+        timer?.invalidate()
+        timer = nil
+
+        guard enabled else {
+            apply {
+                $0.fiveHour = nil
+                $0.sevenDay = nil
+                $0.failure = "無効"
+            }
+            return
+        }
+
+        fetch()
+        timer = Timer.scheduledTimer(withTimeInterval: max(interval, 10), repeats: true) { [weak self] _ in
+            self?.fetch()
+        }
+    }
+
     private func fetch() {
-        guard !isFetching else { return }
+        guard !isFetching, settings.usageEnabled else { return }
 
         guard let token = ClaudeCredentials.accessToken() else {
             apply { $0.failure = "未ログイン" }

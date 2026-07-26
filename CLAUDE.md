@@ -32,7 +32,7 @@ open "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
 
 | パス | 内容 |
 | --- | --- |
-| `~/.claude/sessions/<pid>.json` | 実行中セッションの pid / sessionId / cwd / status。1 秒ごとにポーリング |
+| `~/.claude/sessions/<pid>.json` | 実行中セッションの pid / sessionId / cwd / status。既定で 1 秒ごとにポーリング（間隔は設定で可変） |
 | `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` | トランスクリプト。`usage` にトークン数、`ai-title` にタイトル |
 | Keychain `Claude Code-credentials` | 使用量 API 用の OAuth トークン |
 
@@ -49,6 +49,8 @@ open "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
 **ファイル読み込みは mtime でガードする。** `SummaryStore` と `TranscriptStore` は更新日時が変わったときだけ再パースする。毎秒の再読み込みはしない。
 
 **トークンは保持しない。** CLI がおよそ 1 時間ごとにローテートするため、`ClaudeCredentials.accessToken()` を毎回呼ぶ。
+
+**UI を全部隠せる状態を作らない。** メニューバーアイコンとノッチパネルは個別に非表示にできるが、両方消しても `applicationShouldHandleReopen` で設定ウィンドウに戻れる。承認待ちが発生したときは `showNotchPanel` が false でもパネルを前面に出す（`NotchWindowController` の `approvals.$pending` 監視）。ブロックされたセッションに応答できない状態を作らないため。
 
 ## Swift 6 concurrency の扱い
 

@@ -7,6 +7,7 @@ struct NotchContentView: View {
     @ObservedObject var summaries: SummaryStore
     @ObservedObject var approvals: ApprovalStore
     @ObservedObject var usage: UsageStore
+    @ObservedObject var settings: AppSettings
     /// Width of the physical notch to leave uncovered; 0 on screens without one.
     let notchWidth: CGFloat
     let collapsedHeight: CGFloat
@@ -14,6 +15,8 @@ struct NotchContentView: View {
     private var busyCount: Int {
         monitor.sessions.filter(\.isBusy).count
     }
+
+    private var showsUsage: Bool { settings.showUsageInNotch && settings.usageEnabled }
 
     private var selectedSession: ClaudeSession? {
         guard let id = uiState.selectedSessionId else { return nil }
@@ -40,7 +43,15 @@ struct NotchContentView: View {
             .fill(Color.black)
         )
         .onHover { hovering in
-            uiState.isHovering = hovering
+            // With hover expansion off the pill only opens on click, but a
+            // hover that ends still has to release an already-open panel.
+            if settings.expandOnHover || !hovering {
+                uiState.isHovering = hovering
+            }
+        }
+        .onTapGesture {
+            guard !settings.expandOnHover, !uiState.isExpanded else { return }
+            uiState.isPinned = true
         }
         .animation(.easeInOut(duration: 0.2), value: uiState.isExpanded)
         .onChange(of: uiState.selectedSessionId) { _, _ in
@@ -62,8 +73,8 @@ struct NotchContentView: View {
         .padding(.horizontal, 10)
     }
 
-    /// Two rows, matching the usage meters opposite, so the wings stay
-    /// balanced across the notch.
+    /// Gains a second row when the meters are on, so the wings stay balanced
+    /// across the notch; otherwise busy/idle stays opposite as it always was.
     private var leftWing: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 5) {
@@ -74,14 +85,22 @@ struct NotchContentView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
             }
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(busyCount > 0 ? Color.green : Color.white.opacity(0.35))
-                    .frame(width: 5, height: 5)
-                Text(busyCount > 0 ? "busy" : "idle")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.6))
+            if showsUsage {
+                busyIndicator(compact: true)
             }
+        }
+    }
+
+    /// Sits under the session count while the meters occupy the right wing,
+    /// and moves across to fill that wing when the meters are turned off.
+    private func busyIndicator(compact: Bool) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(busyCount > 0 ? Color.green : Color.white.opacity(0.35))
+                .frame(width: compact ? 5 : 6, height: compact ? 5 : 6)
+            Text(busyCount > 0 ? "busy" : "idle")
+                .font(.system(size: compact ? 9 : 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.6))
         }
     }
 
@@ -90,7 +109,11 @@ struct NotchContentView: View {
     private var rightWing: some View {
         HStack(spacing: 4) {
             if approvals.pending.isEmpty {
-                UsageWingView(snapshot: usage.snapshot)
+                if showsUsage {
+                    UsageWingView(snapshot: usage.snapshot)
+                } else {
+                    busyIndicator(compact: false)
+                }
             } else {
                 Image(systemName: "exclamationmark.shield.fill")
                     .font(.system(size: 10))
@@ -108,7 +131,7 @@ struct NotchContentView: View {
         VStack(spacing: 0) {
             Color.clear.frame(height: collapsedHeight + 6)
 
-            if approvals.pending.isEmpty {
+            if approvals.pending.isEmpty, settings.usageEnabled {
                 UsageStripView(snapshot: usage.snapshot)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)

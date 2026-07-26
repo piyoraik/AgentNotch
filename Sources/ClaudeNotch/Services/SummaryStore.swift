@@ -13,19 +13,35 @@ final class SummaryStore: ObservableObject {
     }
 
     private var cache: [String: CacheEntry] = [:]
-    private var cancellable: AnyCancellable?
+    private var cancellables = Set<AnyCancellable>()
     private var timer: Timer?
     private var lastSessions: [ClaudeSession] = []
 
-    init(monitor: SessionMonitor) {
-        cancellable = monitor.$sessions.sink { [weak self] sessions in
-            self?.lastSessions = sessions
-            self?.refresh(for: sessions)
-        }
+    init(monitor: SessionMonitor, settings: AppSettings = .shared) {
+        monitor.$sessions
+            .sink { [weak self] sessions in
+                self?.lastSessions = sessions
+                self?.refresh(for: sessions)
+            }
+            .store(in: &cancellables)
 
         // A transcript can grow without the session file changing, so poll
         // independently of session-list updates.
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        settings.$summaryPollInterval
+            .removeDuplicates()
+            .sink { [weak self] interval in
+                self?.restartTimer(interval: interval)
+            }
+            .store(in: &cancellables)
+    }
+
+    deinit {
+        timer?.invalidate()
+    }
+
+    private func restartTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: max(interval, 0.5), repeats: true) { [weak self] _ in
             guard let self else { return }
             self.refresh(for: self.lastSessions)
         }

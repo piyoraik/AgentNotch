@@ -17,6 +17,11 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var pending: [Pending] = []
 
     private var server: ApprovalServer?
+    private let settings: AppSettings
+
+    init(settings: AppSettings = .shared) {
+        self.settings = settings
+    }
 
     func start() {
         let server = ApprovalServer { [weak self] request, respond in
@@ -26,7 +31,12 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
                     return
                 }
                 self.pending.append(Pending(request: request, respond: respond))
-                NSApp.requestUserAttention(.informationalRequest)
+                if self.settings.bounceOnApproval {
+                    NSApp.requestUserAttention(.informationalRequest)
+                }
+                if self.settings.playSoundOnApproval {
+                    NSSound(named: self.settings.approvalSoundName)?.play()
+                }
             }
         }
         server.start()

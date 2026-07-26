@@ -7,21 +7,33 @@ final class SessionMonitor: ObservableObject {
     @Published private(set) var sessions: [ClaudeSession] = []
 
     private let sessionsDirectory: URL
+    private let settings: AppSettings
     private var timer: Timer?
+    private var cancellable: AnyCancellable?
 
-    init() {
+    init(settings: AppSettings = .shared) {
+        self.settings = settings
         sessionsDirectory = FileManager.default
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/sessions", isDirectory: true)
 
         reload()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.reload()
-        }
+        cancellable = settings.$sessionPollInterval
+            .removeDuplicates()
+            .sink { [weak self] interval in
+                self?.restartTimer(interval: interval)
+            }
     }
 
     deinit {
         timer?.invalidate()
+    }
+
+    private func restartTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: max(interval, 0.25), repeats: true) { [weak self] _ in
+            self?.reload()
+        }
     }
 
     private func reload() {

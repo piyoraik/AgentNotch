@@ -7,6 +7,7 @@ final class NotchWindowController: NSWindowController {
     private let summaries: SummaryStore
     private let approvals: ApprovalStore
     private let usage: UsageStore
+    private let settings: AppSettings
     private let uiState = NotchUIState()
     private let transcripts = TranscriptStore()
 
@@ -18,15 +19,18 @@ final class NotchWindowController: NSWindowController {
     /// Never torn down: the controller lives for the lifetime of the app.
     private var clickMonitor: Any?
 
-    /// How far the black pill extends past each side of the physical notch,
-    /// giving us visible area to draw the session count and usage meters into.
-    private let wingWidth: CGFloat = 98
-
-    init(monitor: SessionMonitor, summaries: SummaryStore, approvals: ApprovalStore, usage: UsageStore) {
+    init(
+        monitor: SessionMonitor,
+        summaries: SummaryStore,
+        approvals: ApprovalStore,
+        usage: UsageStore,
+        settings: AppSettings = .shared
+    ) {
         self.monitor = monitor
         self.summaries = summaries
         self.approvals = approvals
         self.usage = usage
+        self.settings = settings
         let panel = NotchWindow(contentRect: .zero)
         super.init(window: panel)
         configureFrames()
@@ -40,6 +44,7 @@ final class NotchWindowController: NSWindowController {
     }
 
     func show() {
+        guard settings.showNotchPanel else { return }
         window?.orderFrontRegardless()
     }
 
@@ -48,10 +53,13 @@ final class NotchWindowController: NSWindowController {
         self.geometry = geometry
 
         let screen = geometry.screen
-        let collapsedWidth = geometry.hasNotch ? geometry.notchWidth + wingWidth * 2 : 252
+        // How far the black pill extends past each side of the physical notch,
+        // giving us visible area to draw the session count and meters into.
+        let wingWidth = CGFloat(settings.wingWidth)
+        let collapsedWidth = geometry.hasNotch ? geometry.notchWidth + wingWidth * 2 : wingWidth * 2 + 56
         let collapsedHeight = max(geometry.notchHeight, 32)
-        let expandedWidth: CGFloat = 440
-        let expandedHeight: CGFloat = 560
+        let expandedWidth = CGFloat(settings.panelWidth)
+        let expandedHeight = CGFloat(settings.panelHeight)
 
         let topY = screen.frame.maxY
         let midX = screen.frame.midX
@@ -69,7 +77,7 @@ final class NotchWindowController: NSWindowController {
             height: expandedHeight
         )
 
-        window?.setFrame(collapsedFrame, display: false)
+        window?.setFrame(isExpanded ? expandedFrame : collapsedFrame, display: false)
     }
 
     private func installContentView() {
@@ -81,6 +89,7 @@ final class NotchWindowController: NSWindowController {
             summaries: summaries,
             approvals: approvals,
             usage: usage,
+            settings: settings,
             notchWidth: geometry.hasNotch ? geometry.notchWidth : 0,
             collapsedHeight: max(geometry.notchHeight, 32)
         )
@@ -97,6 +106,30 @@ final class NotchWindowController: NSWindowController {
             }
             .store(in: &cancellables)
 
+        // Size changes take effect without a relaunch; the panel is re-framed
+        // in place and animated to the new geometry if it is already open.
+        settings.$wingWidth
+            .combineLatest(settings.$panelWidth, settings.$panelHeight)
+            .dropFirst()
+            .debounce(for: .milliseconds(120), scheduler: RunLoop.main)
+            .sink { [weak self] _, _, _ in
+                self?.configureFrames()
+            }
+            .store(in: &cancellables)
+
+        settings.$showNotchPanel
+            .removeDuplicates()
+            .sink { [weak self] visible in
+                guard let self else { return }
+                if visible {
+                    self.window?.orderFrontRegardless()
+                } else {
+                    self.uiState.close()
+                    self.window?.orderOut(nil)
+                }
+            }
+            .store(in: &cancellables)
+
         // An approval blocks a session until answered, so surface it without
         // waiting for the user to hover the notch.
         approvals.$pending
@@ -104,11 +137,17 @@ final class NotchWindowController: NSWindowController {
             .removeDuplicates()
             .sink { [weak self] hasPending in
                 guard let self else { return }
-                if hasPending {
+                guard hasPending else {
+                    self.uiState.isPinned = false
+                    if !self.settings.showNotchPanel { self.window?.orderOut(nil) }
+                    return
+                }
+                // Hiding the panel must never leave a blocked session without
+                // an answer surface, so an approval overrides the setting.
+                self.window?.orderFrontRegardless()
+                if self.settings.autoOpenOnApproval {
                     self.uiState.selectedSessionId = nil
                     self.uiState.isPinned = true
-                } else {
-                    self.uiState.isPinned = false
                 }
             }
             .store(in: &cancellables)

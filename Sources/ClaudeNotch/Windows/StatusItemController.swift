@@ -3,43 +3,81 @@ import Combine
 
 /// Menu bar presence. Doubles as the app's only quit affordance, since
 /// LSUIElement apps have no Dock icon or app menu.
-final class StatusItemController {
-    private let statusItem: NSStatusItem
+final class StatusItemController: NSObject {
     private let monitor: SessionMonitor
     private let summaries: SummaryStore
     private let usage: UsageStore
+    private let settings: AppSettings
+    private let openSettings: () -> Void
+    private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
 
-    init(monitor: SessionMonitor, summaries: SummaryStore, usage: UsageStore) {
+    init(
+        monitor: SessionMonitor,
+        summaries: SummaryStore,
+        usage: UsageStore,
+        settings: AppSettings = .shared,
+        openSettings: @escaping () -> Void
+    ) {
         self.monitor = monitor
         self.summaries = summaries
         self.usage = usage
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.settings = settings
+        self.openSettings = openSettings
+        super.init()
 
-        statusItem.button?.image = NSImage(
-            systemSymbolName: "sparkle",
-            accessibilityDescription: "Claude Code sessions"
-        )
-        statusItem.button?.imagePosition = .imageLeading
+        settings.$showStatusItem
+            .removeDuplicates()
+            .sink { [weak self] visible in
+                self?.setStatusItemVisible(visible)
+            }
+            .store(in: &cancellables)
+
+        // Any of these can change what the menu renders, so rebuild on all of
+        // them; the menu is cheap and only rebuilt when something moved.
+        let settingsChanged = settings.$showSessionCountInMenuBar
+            .combineLatest(settings.$showUsageInMenu, settings.$showSessionTitlesInMenu)
+            .map { _, _, _ in () }
 
         monitor.$sessions
             .combineLatest(summaries.$summaries, usage.$snapshot)
-            .sink { [weak self] sessions, summaries, usage in
-                self?.update(sessions: sessions, summaries: summaries, usage: usage)
+            .map { _, _, _ in () }
+            .merge(with: settingsChanged)
+            .sink { [weak self] in
+                self?.update()
             }
             .store(in: &cancellables)
     }
 
-    private func update(
-        sessions: [ClaudeSession],
-        summaries: [String: SessionSummary],
-        usage: UsageSnapshot
-    ) {
-        statusItem.button?.title = " \(sessions.count)"
+    private func setStatusItemVisible(_ visible: Bool) {
+        if visible, statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.button?.image = NSImage(
+                systemSymbolName: "sparkle",
+                accessibilityDescription: "Claude Code sessions"
+            )
+            item.button?.imagePosition = .imageLeading
+            statusItem = item
+            update()
+        } else if !visible, let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+        }
+    }
+
+    private func update() {
+        guard let statusItem else { return }
+        let sessions = monitor.sessions
+        let summaries = self.summaries.summaries
+
+        statusItem.button?.title = settings.showSessionCountInMenuBar ? " \(sessions.count)" : ""
 
         let menu = NSMenu()
-        menu.addItem(usageItem(for: usage))
-        menu.addItem(.separator())
+        if settings.showUsageInMenu, settings.usageEnabled {
+            menu.addItem(usageItem(for: usage.snapshot))
+            menu.addItem(.separator())
+        }
+
         if sessions.isEmpty {
             let item = NSMenuItem(title: "実行中のセッションはありません", action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -53,7 +91,7 @@ final class StatusItemController {
                     action: nil,
                     keyEquivalent: ""
                 )
-                if let summary {
+                if let summary, settings.showSessionTitlesInMenu {
                     let context = SessionSummary.abbreviate(summary.contextTokens)
                     let output = SessionSummary.abbreviate(summary.outputTokens)
                     item.toolTip = summary.title
@@ -66,11 +104,23 @@ final class StatusItemController {
                 menu.addItem(item)
             }
         }
+
         menu.addItem(.separator())
+        let settingsItem = NSMenuItem(
+            title: "設定…",
+            action: #selector(showSettings),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(
             NSMenuItem(title: "ClaudeNotch を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         )
         statusItem.menu = menu
+    }
+
+    @objc private func showSettings() {
+        openSettings()
     }
 
     private func usageItem(for usage: UsageSnapshot) -> NSMenuItem {
