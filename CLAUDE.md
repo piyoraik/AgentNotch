@@ -49,7 +49,9 @@ gh release create v<version> --title "AgentNotch <version>" --notes-file <notes>
 gh release upload v<version> build/AgentNotch-<version>.zip
 ```
 
-**Developer ID を持っていないので署名は ad-hoc、公証も通していない。** そのため配布物には次の 2 つが要る。片方でも欠けると受け取った側で動かない。
+**署名は `project.yml` で ad-hoc（`CODE_SIGN_STYLE: Manual` / `CODE_SIGN_IDENTITY: -`）に固定してある。** `Automatic` に戻さない。Xcode に Apple Developer アカウントを設定しているマシンでは、`com.piyoraik.AgentNotch` を相手のチームに登録しようとしてビルドが落ちる。手元では署名 ID が 1 つも無いため Automatic でも ad-hoc に落ちて成功してしまい、この失敗は他人のマシンでしか出ない。
+
+**Developer ID を持っていないので公証も通していない。** そのため配布物には次の 2 つが要る。片方でも欠けると受け取った側で動かない。
 
 - 署名し直して `com.apple.security.get-task-allow` を落とす。Xcode の ad-hoc 署名はデバッガ接続を許すこのエンタイトルメントを付けるため。入れ子のブリッジが先、器の `.app` が後。
 - zip は `ditto -c -k --sequesterRsrc --keepParent` で作る。`zip(1)` は拡張属性とシンボリックリンクを壊す。
