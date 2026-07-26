@@ -20,10 +20,21 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
     /// A notice nobody acted on shouldn't sit in the panel for the rest of the
     /// day. Answering in the terminal usually clears it long before this.
     private static let lifetime: TimeInterval = 300
+    /// How recently a session must have been working for its notice to mean
+    /// "it stopped to ask something".
+    ///
+    /// The CLI also fires `Notification` at a session that has merely been
+    /// sitting idle, and people keep sessions parked — this machine had five
+    /// of them. Without this window every parked terminal lights the notch a
+    /// minute after it is left alone, which reads as the app inventing
+    /// notifications.
+    private static let activeWindow: TimeInterval = 120
 
     private let approvals: ApprovalStore
     private let settings: AppSettings
     private var cancellables = Set<AnyCancellable>()
+    /// Session id → when it was last seen working. Owned by main.
+    private var lastActiveAt: [String: Date] = [:]
 
     init(
         monitor: SessionMonitor,
@@ -43,6 +54,14 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
             }
             .store(in: &cancellables)
 
+        // A session that just stopped working is the one that might have
+        // stopped to ask.
+        monitor.finished
+            .sink { [weak self] finish in
+                self?.lastActiveAt[finish.sessionId] = finish.finishedAt
+            }
+            .store(in: &cancellables)
+
         settings.$notifyOnWaiting
             .removeDuplicates()
             .filter { !$0 }
@@ -58,6 +77,9 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
             guard let self, self.settings.notifyOnWaiting else { return }
             // The same question is already on screen with buttons under it.
             guard !self.approvals.isBlocked(sessionId: notice.sessionId) else { return }
+            // A session that hasn't done anything in minutes isn't stuck on a
+            // question; it is just open. Saying so every minute is noise.
+            guard self.wasRecentlyActive(notice.sessionId) else { return }
 
             self.notices.removeAll { $0.id == notice.id }
             self.notices.append(notice)
@@ -74,6 +96,13 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
         notices.removeAll { $0.id == notice.id }
     }
 
+    /// Whether the session was working recently enough that a notice about it
+    /// means "it stopped to ask", rather than "this terminal is still open".
+    private func wasRecentlyActive(_ sessionId: String) -> Bool {
+        guard let last = lastActiveAt[sessionId] else { return false }
+        return Date().timeIntervalSince(last) <= Self.activeWindow
+    }
+
     /// Drops notices whose session has moved on.
     ///
     /// Progress is judged by the transcript growing past the moment the notice
@@ -81,8 +110,16 @@ final class NoticeStore: ObservableObject, @unchecked Sendable {
     /// waits on its own terminal prompt isn't something we've pinned down, and
     /// guessing wrong here would clear the notice the instant it appeared.
     private func reconcile(sessions: [ClaudeSession], summaries: [String: SessionSummary]) {
-        guard !notices.isEmpty else { return }
         let now = Date()
+        for session in sessions where session.isWorking {
+            lastActiveAt[session.sessionId] = now
+        }
+        // Sessions that are gone can't be waiting on anything.
+        lastActiveAt = lastActiveAt.filter { id, _ in
+            sessions.contains { $0.sessionId == id }
+        }
+
+        guard !notices.isEmpty else { return }
         notices.removeAll { notice in
             guard sessions.contains(where: { $0.sessionId == notice.sessionId }) else { return true }
             if let activity = summaries[notice.sessionId]?.lastActivity, activity > notice.receivedAt {

@@ -26,9 +26,25 @@ final class SessionMonitor: ObservableObject {
     /// second publish that subscribers have to learn to ignore.
     let finished = PassthroughSubject<FinishedSession, Never>()
 
-    /// Session id → when it was first seen busy. Owned by main, like every
+    /// Where each session is in its current turn. Owned by main, like every
     /// other member here: `reload()` only ever runs on the main run loop.
-    private var busySince: [String: Date] = [:]
+    private var progress: [String: Progress] = [:]
+
+    private struct Progress {
+        /// Start of the stretch the session has been working for, cleared once
+        /// its end has been announced.
+        var workingSince: Date?
+        /// First poll that saw it idle since then.
+        var idleSince: Date?
+        var announced = false
+    }
+
+    /// How long a session has to stay idle before its turn counts as over.
+    ///
+    /// The CLI passes through `waiting` in the middle of a run, and any state
+    /// that isn't `idle` already counts as working — but a settle time costs
+    /// nothing and keeps one odd poll from being read as a finished turn.
+    private static let settleDelay: TimeInterval = 2
 
     private let sessionsDirectory: URL
     private let settings: AppSettings
@@ -65,7 +81,7 @@ final class SessionMonitor: ObservableObject {
         guard let files = try? fm.contentsOfDirectory(at: sessionsDirectory, includingPropertiesForKeys: nil) else {
             // Nothing readable means nothing to compare against next time; a
             // session that comes back is a fresh one, not a finished one.
-            busySince.removeAll()
+            progress.removeAll()
             sessions = []
             return
         }
@@ -89,31 +105,43 @@ final class SessionMonitor: ObservableObject {
     }
 
     /// Compares this pass against the previous one and announces the sessions
-    /// that stopped working.
+    /// whose turn came to an end.
     ///
     /// Only sessions that are still in the list count: one that disappeared
-    /// while busy means the terminal went away mid-run, which is not something
-    /// to congratulate the user about.
+    /// while working means the terminal went away mid-run, which is not
+    /// something to congratulate the user about.
     private func detectFinished(in next: [ClaudeSession]) {
         let now = Date()
-        var stillBusy: [String: Date] = [:]
+        var carried: [String: Progress] = [:]
 
-        for session in next where session.isBusy {
-            stillBusy[session.sessionId] = busySince[session.sessionId] ?? now
-        }
-        for session in next where !session.isBusy {
-            guard let start = busySince[session.sessionId] else { continue }
-            finished.send(
-                FinishedSession(
-                    sessionId: session.sessionId,
-                    projectName: session.projectName,
-                    pid: session.pid,
-                    busyDuration: now.timeIntervalSince(start),
-                    finishedAt: now
-                )
-            )
+        for session in next {
+            var entry = progress[session.sessionId] ?? Progress()
+
+            if session.isWorking {
+                entry.workingSince = entry.workingSince ?? now
+                entry.idleSince = nil
+                entry.announced = false
+            } else if let start = entry.workingSince, !entry.announced {
+                let idleSince = entry.idleSince ?? now
+                entry.idleSince = idleSince
+                if now.timeIntervalSince(idleSince) >= Self.settleDelay {
+                    entry.announced = true
+                    entry.workingSince = nil
+                    finished.send(
+                        FinishedSession(
+                            sessionId: session.sessionId,
+                            projectName: session.projectName,
+                            pid: session.pid,
+                            busyDuration: idleSince.timeIntervalSince(start),
+                            finishedAt: idleSince
+                        )
+                    )
+                }
+            }
+
+            carried[session.sessionId] = entry
         }
 
-        busySince = stillBusy
+        progress = carried
     }
 }

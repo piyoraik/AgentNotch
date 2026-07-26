@@ -132,9 +132,14 @@ struct NotchContentView: View {
         }
     }
 
-    /// Usage is the resting state here. Everything else takes the slot in the
-    /// order of how stuck the session is: an approval is blocked on us, a
-    /// notice is blocked on the terminal, a finished run is only news.
+    /// Usage is the resting state here, and only something that is **still
+    /// stuck** may take the slot: an approval blocked on us, a session blocked
+    /// on the terminal.
+    ///
+    /// 終わった知らせをここに出さない。1 ターンごとに数秒だけメーターが
+    /// 消えて戻るため、使用量が読み込み直されているように見えるうえ、
+    /// 「何も起きていないのにバッジが出ている」と読める。完了は音と、
+    /// 一覧の当該行に出す。
     private var rightWing: some View {
         HStack(spacing: 4) {
             if hasApproval {
@@ -151,13 +156,6 @@ struct NotchContentView: View {
                     tint: AgentBrand.amber
                 )
                 .transition(.scale(scale: 0.7).combined(with: .opacity))
-            } else if !alerts.recentlyFinished.isEmpty {
-                WingBadge(
-                    symbol: "checkmark.circle.fill",
-                    text: alerts.recentlyFinished.count > 1 ? "完了 \(alerts.recentlyFinished.count)" : "完了",
-                    tint: AgentBrand.accent
-                )
-                .transition(.scale(scale: 0.7).combined(with: .opacity))
             } else {
                 Group {
                     if showsUsage {
@@ -171,7 +169,6 @@ struct NotchContentView: View {
         }
         .animation(Motion.quick, value: approvals.pending.count)
         .animation(Motion.quick, value: notices.notices.count)
-        .animation(Motion.quick, value: alerts.recentlyFinished.count)
     }
 
     // MARK: - Expanded
@@ -338,6 +335,7 @@ struct NotchContentView: View {
                                 SessionRow(
                                     session: session,
                                     summary: summaries.summaries[session.sessionId],
+                                    justFinished: alerts.recentlyFinished.contains { $0.sessionId == session.sessionId },
                                     showsCost: settings.showCostEstimates,
                                     onReveal: {
                                         TerminalLocator.reveal(
@@ -407,6 +405,9 @@ private struct WingBadge: View {
 private struct SessionRow: View {
     let session: ClaudeSession
     let summary: SessionSummary?
+    /// 直前に手が空いたばかりの行。どのセッションが終わったのかは行でしか
+    /// 分からないので、ピルのバッジではなくここに出す。
+    var justFinished: Bool = false
     var showsCost: Bool = true
     var onReveal: () -> Void
 
@@ -423,6 +424,17 @@ private struct SessionRow: View {
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
+
+                if justFinished {
+                    HStack(spacing: 3) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 8))
+                        Text("完了")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(AgentBrand.accent.opacity(0.9))
+                    .transition(.opacity)
+                }
 
                 if let activity = summary?.lastActivity {
                     Text(Self.elapsed(since: activity))
@@ -496,6 +508,7 @@ private struct SessionRow: View {
         .scaleEffect(hovering ? 1.012 : 1)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovering)
         .animation(Motion.quick, value: session.isBusy)
+        .animation(Motion.quick, value: justFinished)
         .onHover { hovering = $0 }
     }
 
