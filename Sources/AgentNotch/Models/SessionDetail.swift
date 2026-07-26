@@ -25,6 +25,45 @@ struct TranscriptMessage: Identifiable, Equatable {
     let timestamp: Date?
 }
 
+/// A memory file the CLI surfaced into the session.
+///
+/// Recall arrives as an `attachment` record of type `relevant_memories`. The
+/// body is only carried inline for synthesized entries — file-backed ones are
+/// meant to be lazy-loaded from `path`, so the summary here is read off disk.
+struct MemoryReference: Identifiable, Equatable {
+    /// リコールされたのか、セッションが自分で開いた（書いた）のかは別物。
+    /// 混ぜて出すと「参照した」の意味が濁るので、行のアイコンで分ける。
+    enum Origin {
+        /// `relevant_memories` として CLI が本体を持ち出したもの。
+        case recalled
+        /// Read / Write / Edit がファイルを直接触ったもの。
+        case touched
+    }
+
+    var id: String { path }
+    let path: String
+    let origin: Origin
+    /// The frontmatter `description`, when the file is still on disk. Memories
+    /// can be deleted after the turn that recalled them, so this is optional.
+    let summary: String?
+
+    /// `feedback_bedrock_model_access.md` reads as noise in a narrow row.
+    var name: String {
+        let base = (path as NSString).lastPathComponent
+        return base.hasSuffix(".md") ? String(base.dropLast(3)) : base
+    }
+
+    var exists: Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
+    /// メモリ置き場は `~/.claude/**/memory/`。リポジトリが自前で持つ
+    /// `memory/` ディレクトリを巻き込まないよう、両方を条件にする。
+    static func isMemoryPath(_ path: String) -> Bool {
+        path.hasSuffix(".md") && path.contains("/.claude/") && path.contains("/memory/")
+    }
+}
+
 struct SessionDetail: Equatable {
     var title: String?
     var model: String?
@@ -34,6 +73,8 @@ struct SessionDetail: Equatable {
     /// aggregate above can't be used for cost on its own.
     var tokensByModel: [String: TokenStats] = [:]
     var messages: [TranscriptMessage] = []
+    /// Memories recalled during this session, in the order they first appeared.
+    var memories: [MemoryReference] = []
 
     /// Estimated equivalent API cost. Unrecognised models contribute nothing
     /// rather than dropping the whole figure — see `TokenPricing`.

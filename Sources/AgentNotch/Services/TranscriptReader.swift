@@ -5,6 +5,9 @@ import Foundation
 enum TranscriptReader {
     /// Keeps the detail pane bounded on long-running sessions.
     private static let messageLimit = 60
+    /// Each recall surfaces at most a handful, but a long session accumulates.
+    /// One disk read per entry follows, so this stays bounded too.
+    private static let memoryLimit = 20
 
     static func transcriptURL(for session: ClaudeSession) -> URL? {
         let fm = FileManager.default
@@ -146,6 +149,7 @@ enum TranscriptReader {
 
         var detail = SessionDetail()
         var messages: [TranscriptMessage] = []
+        var memories = MemoryTrail()
 
         for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
@@ -157,22 +161,93 @@ enum TranscriptReader {
             case "ai-title":
                 detail.title = object["aiTitle"] as? String
             case "assistant":
-                ingestAssistant(object, into: &detail, messages: &messages)
+                ingestAssistant(object, into: &detail, messages: &messages, memories: &memories)
             case "user":
                 ingestUser(object, messages: &messages)
+            case "attachment":
+                ingestAttachment(object, memories: &memories)
             default:
                 break
             }
         }
 
         detail.messages = Array(messages.suffix(messageLimit))
+        detail.memories = memories.resolved(limit: memoryLimit)
         return detail
+    }
+
+    /// The memory files a session touched, in the order they first appeared.
+    ///
+    /// A file can show up both ways — recalled, then opened to check it. The
+    /// recall is the more informative of the two, so it wins the row.
+    private struct MemoryTrail {
+        private var order: [String] = []
+        private var origins: [String: MemoryReference.Origin] = [:]
+
+        mutating func note(_ path: String, as origin: MemoryReference.Origin) {
+            guard !path.isEmpty, MemoryReference.isMemoryPath(path) else { return }
+            guard let existing = origins[path] else {
+                order.append(path)
+                origins[path] = origin
+                return
+            }
+            if existing == .touched, origin == .recalled {
+                origins[path] = .recalled
+            }
+        }
+
+        func resolved(limit: Int) -> [MemoryReference] {
+            order.prefix(limit).map { path in
+                MemoryReference(
+                    path: path,
+                    origin: origins[path] ?? .touched,
+                    summary: frontmatterDescription(atPath: path)
+                )
+            }
+        }
+    }
+
+    /// Collects the memory files the CLI recalled into the session.
+    ///
+    /// Synthesized entries carry their body inline and have no file behind
+    /// them; they're skipped, since there is nothing to open.
+    private static func ingestAttachment(_ object: [String: Any], memories: inout MemoryTrail) {
+        guard let attachment = object["attachment"] as? [String: Any],
+              attachment["type"] as? String == "relevant_memories",
+              let recalled = attachment["memories"] as? [[String: Any]]
+        else { return }
+
+        for memory in recalled {
+            guard let path = memory["path"] as? String else { continue }
+            memories.note(path, as: .recalled)
+        }
+    }
+
+    /// Reads the `description:` line out of a memory's frontmatter. Written to
+    /// stop at the closing fence so a body mentioning "description" can't be
+    /// picked up, and to give up quietly on a file that has since been deleted.
+    private static func frontmatterDescription(atPath path: String) -> String? {
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+
+        var lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return nil }
+        lines.removeFirst()
+
+        for line in lines {
+            if line.trimmingCharacters(in: .whitespaces) == "---" { return nil }
+            guard line.hasPrefix("description:") else { continue }
+            let value = line.dropFirst("description:".count)
+                .trimmingCharacters(in: .whitespaces)
+            return value.isEmpty ? nil : value
+        }
+        return nil
     }
 
     private static func ingestAssistant(
         _ object: [String: Any],
         into detail: inout SessionDetail,
-        messages: inout [TranscriptMessage]
+        messages: inout [TranscriptMessage],
+        memories: inout MemoryTrail
     ) {
         guard let message = object["message"] as? [String: Any] else { return }
 
@@ -216,6 +291,12 @@ enum TranscriptReader {
                 text += (block["text"] as? String ?? "")
             case "tool_use":
                 if let name = block["name"] as? String { tools.append(name) }
+                // Read / Write / Edit のどれでも入力は `file_path`。ツール名で
+                // 絞らないのは、増えても同じ書式なら拾えるようにするため。
+                if let input = block["input"] as? [String: Any],
+                   let path = input["file_path"] as? String {
+                    memories.note(path, as: .touched)
+                }
             default:
                 break
             }

@@ -15,6 +15,9 @@ struct SessionDetailView: View {
                     costBar(detail)
                 }
                 tokenGrid(detail.tokens)
+                if !detail.memories.isEmpty {
+                    memories(detail.memories)
+                }
                 Divider().overlay(Color.white.opacity(0.12))
                 transcript(detail.messages)
             } else {
@@ -154,6 +157,20 @@ struct SessionDetailView: View {
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
+    /// メモリはトークンと同じ「このセッションの持ち物」なので、発言の流れの
+    /// 上に置く。参照が無いセッションでは丸ごと出さない。
+    private func memories(_ memories: [MemoryReference]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("参照したメモリ")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+
+            ForEach(memories) { memory in
+                MemoryRow(memory: memory)
+            }
+        }
+    }
+
     private func transcript(_ messages: [TranscriptMessage]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -187,6 +204,53 @@ struct SessionDetailView: View {
             return String(format: "%.1fk", Double(value) / 1_000)
         }
         return "\(value)"
+    }
+}
+
+/// 行そのものを押して本体を開く。「開く」ボタンを別に置くと、狭いパネルで
+/// 当たり判定が二つに割れる。
+private struct MemoryRow: View {
+    let memory: MemoryReference
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(URL(fileURLWithPath: memory.path))
+        } label: {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: memory.origin == .recalled ? "brain" : "doc.text")
+                    .font(.system(size: 9))
+                    .foregroundStyle(AgentBrand.accent.opacity(memory.origin == .recalled ? 0.8 : 0.45))
+                    .padding(.top, 1)
+                    .help(memory.origin == .recalled ? "リコールされた" : "このセッションが開いた")
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(memory.name)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+
+                    if let summary = memory.summary {
+                        Text(summary)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle(scale: 0.98))
+        .disabled(!memory.exists)
+        .opacity(memory.exists ? 1 : 0.5)
+        .help(memory.exists ? memory.path : "\(memory.path)（削除済み）")
     }
 }
 
