@@ -8,6 +8,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.10.0"
+    CURRENT_PROJECT_VERSION: "1"
 targets:
   AgentNotch:
     type: application
@@ -20,6 +22,10 @@ targets:
       properties:
         LSUIElement: true
         CFBundleDisplayName: AgentNotch
+        # XcodeGen は既定で 1.0 / 1 を書き込むので、ビルド設定を参照させる。
+        # 版を上げるときは settings.base の MARKETING_VERSION だけを直す。
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSAppleEventsUsageDescription: セッションを実行しているターミナルのタブを前面に出すために使用します。
         NSHumanReadableCopyright: ""
     settings:
