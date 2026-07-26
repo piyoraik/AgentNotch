@@ -10,13 +10,28 @@ Mac のノッチとメニューバーから Claude Code のセッションを監
 
 ## 必要環境
 
-- macOS 14 以降
-- Xcode 26 以降（`xcodebuild` が使えること）
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）
+- macOS 14 以降、Apple Silicon
+- ソースからビルドする場合は Xcode 26 以降と [XcodeGen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）
 
 ノッチのある内蔵ディスプレイがなくても動作する。その場合はメニューバー中央に同等のピルを表示する。
 
 複数のディスプレイをつないでいるときは、設定の「表示」で表示先を選べる。既定ではノッチのある画面を自動で選ぶ。選んだディスプレイを外している間は自動選択に戻り、つなぎ直すと元の画面に戻る。
+
+## インストール
+
+[リリース](https://github.com/piyoraik/AgentNotch/releases/latest)の `AgentNotch-<version>.zip` を展開し、`AgentNotch.app` を `/Applications` に置く。
+
+**Apple の署名を受けていないため、そのままでは開けない。** 配布に必要な Developer ID を持っていないので、公証を通していない。ダウンロードした .app には macOS が quarantine 属性を付けるので、これを外す。
+
+```bash
+xattr -dr com.apple.quarantine /Applications/AgentNotch.app
+```
+
+外さずに開くと「開発元を検証できないため開けません」と言われる。macOS 15 以降は Control クリックの抜け道が塞がれているので、その場合は**システム設定 → プライバシーとセキュリティ**を開いていちばん下の「このまま開く」を押す。
+
+AgentNotch は Dock アイコンを出さない（`LSUIElement`）。**起動したかどうかはメニューバーのアイコンとノッチで判断する。** 何も出てこない場合は quarantine が外れていない可能性が高い。
+
+自分でビルドしたものにはこの制約はかからない。手順は「[ビルド](#ビルド)」を参照。
 
 ## 機能
 
@@ -92,6 +107,16 @@ xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
 
 `open <上記パス>/AgentNotch.app` で起動する。Dock アイコンは出ない（`LSUIElement`）。**終了はメニューバーアイコン → 「AgentNotch を終了」**から行う。
 
+ブリッジ（`agentnotch-bridge`）は `AgentNotch` の依存になっているので、このスキームをビルドすれば一緒に建ち、`AgentNotch.app/Contents/MacOS/` に入る。
+
+### 配布用にまとめる
+
+```bash
+./Scripts/release.sh
+```
+
+Release でビルドし、Xcode の ad-hoc 署名が付ける `get-task-allow` を落としてから `build/AgentNotch-<version>.zip` を作る。**バージョンは `project.yml` の `MARKETING_VERSION` だけを直す。** `Info.plist` はそこを参照している。
+
 ### アイコン
 
 アイコンは自前のもので、`Design/generate-icon.py` が SVG とアプリアイコンの PNG を書き出す。形を変えるときはスクリプトの定数を直して回す（SVG は生成物なので手で直しても上書きされる）。
@@ -110,15 +135,19 @@ python3 Design/generate-icon.py
 
 ### 1. ブリッジを配置
 
-```bash
-xcodebuild -project AgentNotch.xcodeproj -scheme agentnotch-bridge \
-  -configuration Debug -destination 'platform=macOS' build
+ブリッジは `.app` に同梱されている。フックから参照するパスを固定するため、アプリの外に写しておく。
 
+```bash
 mkdir -p ~/Library/Application\ Support/AgentNotch/bin
-cp "$(xcodebuild -project AgentNotch.xcodeproj -scheme agentnotch-bridge \
-  -showBuildSettings 2>/dev/null | awk '/ BUILT_PRODUCTS_DIR /{print $3}')/agentnotch-bridge" \
+cp /Applications/AgentNotch.app/Contents/MacOS/agentnotch-bridge \
   ~/Library/Application\ Support/AgentNotch/bin/
 ```
+
+**フックから .app の中を直接指さない。** アプリを移動したり入れ替えたりするとパスが外れ、フックが実行できずに承認のたびにエラーが出る。
+
+ソースからビルドしている場合は、コピー元を `$(xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch -showBuildSettings 2>/dev/null | awk '/ BUILT_PRODUCTS_DIR /{print $3}')/AgentNotch.app/Contents/MacOS/agentnotch-bridge` に読み替える。
+
+アプリを更新したときは、このコピーもやり直す。
 
 ### 2. フックを登録
 
@@ -161,3 +190,4 @@ AgentNotch が起動していない場合、ブリッジは **0.5 秒以内に�
 - 承認できるのは**ツールの許可 / 拒否**まで。`AskUserQuestion` の選択肢やプラン承認はフックの対象外で、ターミナルで答える必要がある。
 - ノッチは MacBook 内蔵ディスプレイにしかない。外部ディスプレイで作業している場合、常用の入口はメニューバーアイコンになる。
 - ターミナルのタブ特定に対応しているのは iTerm2 と Terminal.app のみ。初回はシステムの自動化許可ダイアログが出る。
+- 配布している `.app` は未署名・未公証。初回に quarantine を外す手間がかかるほか、署名が更新ごとに変わるため、ターミナルの自動化許可を入れ直すよう求められることがある。

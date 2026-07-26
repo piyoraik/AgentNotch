@@ -33,6 +33,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.piyoraik.AgentNotch
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: false
+    # ブリッジを Contents/MacOS に同梱する。.app だけ受け取った人が
+    # ソースを持たずに承認フックを組めるようにするため。
+    dependencies:
+      - target: agentnotch-bridge
+        embed: true
+        copy:
+          destination: executables
   agentnotch-bridge:
     type: tool
     platform: macOS

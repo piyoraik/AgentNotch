@@ -12,7 +12,7 @@ xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
   -configuration Debug -destination 'platform=macOS' build
 ```
 
-ターゲットは 2 つ。GUI アプリの `AgentNotch` と、フックから起動される CLI の `agentnotch-bridge`。
+ターゲットは 2 つ。GUI アプリの `AgentNotch` と、フックから起動される CLI の `agentnotch-bridge`。ブリッジは `AgentNotch` の依存として `Contents/MacOS` にコピーされるので、アプリのスキームをビルドすれば両方建つ。**この同梱を外さない。** `.app` だけ受け取った人はソースを持たないため、外すと承認フックを組む手段が無くなる。
 
 既存ファイルの編集だけなら `xcodegen generate` は不要。`project.yml` がソースオブトゥルースで、`.xcodeproj` は生成物。**`.xcodeproj` を直接編集しない。**
 
@@ -32,6 +32,27 @@ open "$(xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
 ```
 
 `LSUIElement` アプリなので Dock に出ない。プロセスの生存確認は `ps aux | grep AgentNotch`。
+
+## リリース
+
+`Scripts/release.sh` が Release ビルドから `build/AgentNotch-<version>.zip` を作る。GitHub の Release に添付しているのはこれ。
+
+**バージョンは `project.yml` の `MARKETING_VERSION` の 1 箇所だけ。** `Info.plist` の `CFBundleShortVersionString` はそこを参照しており、設定画面の「バージョン」欄（`SettingsView.swift`）が読むのも同じ値。XcodeGen は指定が無いと `1.0` を書き込むので、この参照を外さない。
+
+```bash
+./Scripts/release.sh
+gh release create v<version> --title "AgentNotch <version>" --notes-file <notes>
+gh release upload v<version> build/AgentNotch-<version>.zip
+```
+
+**Developer ID を持っていないので署名は ad-hoc、公証も通していない。** そのため配布物には次の 2 つが要る。片方でも欠けると受け取った側で動かない。
+
+- 署名し直して `com.apple.security.get-task-allow` を落とす。Xcode の ad-hoc 署名はデバッガ接続を許すこのエンタイトルメントを付けるため。入れ子のブリッジが先、器の `.app` が後。
+- zip は `ditto -c -k --sequesterRsrc --keepParent` で作る。`zip(1)` は拡張属性とシンボリックリンクを壊す。
+
+受け取る側は `xattr -dr com.apple.quarantine` が要る。**この手間を README から消さない。** `LSUIElement` で Dock アイコンが出ないため、Gatekeeper に止められたのか起動したのかが区別できず、外し方が書いていないと「動かない」で終わる。
+
+`ENABLE_HARDENED_RUNTIME` を有効にするのは公証を通すときだけ。有効にすると `NSAppleScript`（`TerminalLocator`）が `com.apple.security.automation.apple-events` エンタイトルメント無しでは黙って失敗する。
 
 ## 名前とアイコン
 
