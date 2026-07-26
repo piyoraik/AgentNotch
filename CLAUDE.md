@@ -56,7 +56,25 @@ gh release upload v<version> build/AgentNotch-<version>.zip
 - 署名し直して `com.apple.security.get-task-allow` を落とす。Xcode の ad-hoc 署名はデバッガ接続を許すこのエンタイトルメントを付けるため。入れ子のブリッジが先、器の `.app` が後。
 - zip は `ditto -c -k --sequesterRsrc --keepParent` で作る。`zip(1)` は拡張属性とシンボリックリンクを壊す。
 
+**リリースには zip と `.sig` を必ず揃えて載せる。** アプリの自動更新は署名の付いていないリリースを無視する（`UpdateStore.parseRelease` が `.sig` の無い資産を弾く）ので、署名を忘れたリリースは「配ったのに誰にも届かない」形になる。`Scripts/release.sh` が署名まで面倒を見るので、手で zip を作って上げない。
+
+**リリース鍵を失くさない・リポジトリに入れない。** 秘密鍵は `~/.config/agentnotch/release-key`（0600）、公開鍵は `ReleaseSignature.swift` に直書き。この 2 つが対でないと更新が通らない。GitHub に置いてある物だけで署名を作れないことが、この仕組みが守っている唯一のもの。**鍵を作り直すと、既に配った版はアプリから更新できなくなる**（手で入れ替えてもらうしかない）。`release.sh` は署名後にアプリ側の公開鍵で検証し直して、食い違ったまま配れないようにしてある。
+
 受け取る側は `xattr -dr com.apple.quarantine` が要る。**この手間を README から消さない。** `LSUIElement` で Dock アイコンが出ないため、Gatekeeper に止められたのか起動したのかが区別できず、外し方が書いていないと「動かない」で終わる。
+
+### 自動更新で守ること
+
+**署名を通っていないものに触らない。** `UpdateStore.download` は検証してから展開する。ここを「展開してから検証」に入れ替えない。Apple の署名が無い以上、GitHub から届いたという事実は根拠にならない。zip の署名は中身の `.app` までは保証しないので、展開後に `CFBundleIdentifier` とバージョンも照合している。
+
+**自動なのは確認だけ。** ダウンロードと入れ替えはボタンを押したときにしか走らない。`automaticUpdateChecks` を「自動でインストール」に広げない。
+
+**古い版に戻せる形で配らない。** 同じか古いバージョンは `.upToDate` として無視する。署名は有効なままなので、この比較を外すと、署名済みの古い版を配って戻させることができてしまう。
+
+**入れ替えは切り離したスクリプトに任せる。** 動いているバンドルは自分自身を置き換えられない。スクリプトは古いバンドルを `mv` で退避してから `ditto` し、失敗したら戻す。`rm -rf` してからコピーする形に変えない。失敗したときにアプリが消える。
+
+**入れ替え時にブリッジのコピーも更新する。** `release.sh --install` と同じ理由。フックが読むのはアプリの外。
+
+**DerivedData から動いているビルドは更新しない。** 開発中のビルドがリリース版で上書きされると、何が動いているのか分からなくなる。
 
 `ENABLE_HARDENED_RUNTIME` を有効にするのは公証を通すときだけ。有効にすると `NSAppleScript`（`TerminalLocator`）が `com.apple.security.automation.apple-events` エンタイトルメント無しでは黙って失敗する。
 

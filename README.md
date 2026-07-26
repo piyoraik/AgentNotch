@@ -33,6 +33,8 @@ AgentNotch は Dock アイコンを出さない（`LSUIElement`）。**起動し
 
 自分でビルドしたものにはこの制約はかからない。手順は「[ビルド](#ビルド)」を参照。
 
+この手順が要るのは最初の 1 回だけ。0.11.0 以降はアプリから更新できる（「[ソフトウェア更新](#ソフトウェア更新)」）。
+
 ## 機能
 
 ### セッション監視
@@ -71,6 +73,18 @@ AgentNotch は Dock アイコンを出さない（`LSUIElement`）。**起動し
 パターンで許可しても、`xcodegen generate && rm -rf /` のように**別のコマンドが連結されている場合は自動許可しない**。`&&` `;` `|` `` ` `` `$(` 改行 リダイレクトのいずれかを含むコマンドは、通常どおり承認を求める。
 
 登録したルールはセッション一覧の盾バッジから一覧・削除できる。`~/.claude/settings.json` は書き換えないので、消せばアプリ側だけで元に戻る。
+
+### ソフトウェア更新
+
+1 日 1 回 GitHub のリリースを確認し、新しい版があればメニューバーのメニューと設定の「一般」に出る。**確認までが自動で、ダウンロードと入れ替えは押したときだけ行う。**
+
+配布物には Ed25519 の署名が付いていて、アプリは自分に埋め込まれた公開鍵で検証してから展開する。秘密鍵はリリースを作るマシンにしかないので、GitHub 側が乗っ取られても署名のない配布物は実行されない。
+
+非公開リポジトリのため取得には認証が要るが、アプリはトークンを持たない。ログイン済みの `gh` コマンドに任せる（`claude` CLI の資格情報を借りているのと同じ考え方）。`gh` が無い場合や未ログインの場合は、その旨を出して何もしない。
+
+入れ替えは切り離したスクリプトが行う。動いているバンドルは自分自身を置き換えられないため。古いバンドルは削除せず退避してから差し替えるので、コピーに失敗しても元に戻る。フックが参照するブリッジのコピーも同時に更新する。
+
+Xcode の DerivedData から起動しているビルドは更新の対象外。
 
 ### ターミナルへのジャンプ
 
@@ -116,7 +130,22 @@ xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
 ./Scripts/release.sh --install   # さらに /Applications に入れ替えて起動し直す
 ```
 
-Release でビルドし、Xcode の ad-hoc 署名が付ける `get-task-allow` を落としてから zip を作る。**バージョンは `project.yml` の `MARKETING_VERSION` だけを直す。** `Info.plist` はそこを参照している。
+Release でビルドし、Xcode の ad-hoc 署名が付ける `get-task-allow` を落としてから zip を作り、リリース鍵で署名する。**バージョンは `project.yml` の `MARKETING_VERSION` だけを直す。** `Info.plist` はそこを参照している。
+
+リリース鍵は初回だけ作る。秘密鍵は `~/.config/agentnotch/release-key` に置かれ、**リポジトリには入れない。**
+
+```bash
+swift Scripts/signing.swift keygen   # 公開鍵を ReleaseSignature.swift に貼る
+```
+
+`release.sh` は署名したあと、`ReleaseSignature.swift` に埋まっている公開鍵で検証してから終わる。鍵が食い違ったまま配ると、受け取った側がアプリから更新できなくなるため。
+
+リリースには zip と `.sig` の両方を載せる。署名が無いものはアプリが取りに行かない。
+
+```bash
+gh release create v<version> --notes-file <notes> \
+  build/AgentNotch-<version>.zip build/AgentNotch-<version>.zip.sig
+```
 
 `--install` は動いている AgentNotch を終了してから `/Applications/AgentNotch.app` を置き換え、**フックが参照しているブリッジのコピーも更新してから**起動し直す。自分でビルドしたものに quarantine は付かないので `xattr` は要らない。
 
