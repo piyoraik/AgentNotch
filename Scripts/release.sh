@@ -2,13 +2,29 @@
 #
 # 配布用の AgentNotch.app を Release でビルドし、zip に固めて build/ に置く。
 #
-#   ./Scripts/release.sh
+#   ./Scripts/release.sh             zip を作るだけ
+#   ./Scripts/release.sh --install   さらに /Applications に入れ替えて起動し直す
 #
 # 署名は ad-hoc のまま。Developer ID を持っていないため公証も通していないので、
 # 受け取った側は quarantine 属性を外す必要がある（手順は README）。
+# 自分でビルドしたものには quarantine が付かないので --install には要らない。
 set -euo pipefail
 
+INSTALL=0
+for arg in "$@"; do
+  case "$arg" in
+    --install) INSTALL=1 ;;
+    *) echo "知らない引数: $arg" >&2; exit 2 ;;
+  esac
+done
+
 cd "$(dirname "$0")/.."
+
+BUNDLE_ID="com.piyoraik.AgentNotch"
+# 差し替え先。rm -rf する相手なので、上書きできるのは入れ替え先の確認を
+# テストするためだけ。どちらの経路でも CFBundleIdentifier は必ず照合する。
+DEST="${AGENTNOTCH_DEST:-/Applications/AgentNotch.app}"
+BRIDGE_DIR="$HOME/Library/Application Support/AgentNotch/bin"
 
 echo "==> xcodegen generate"
 xcodegen generate >/dev/null
@@ -51,6 +67,46 @@ echo "==> $ZIP"
 # ditto を使うのは、zip(1) と違って拡張属性とシンボリックリンクを壊さないため。
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
+if [ "$INSTALL" -eq 0 ]; then
+  echo
+  echo "できたもの: $ZIP"
+  echo "リリースに載せる: gh release upload v$VERSION $ZIP"
+  echo "自分のマシンに入れる: $0 --install"
+  exit 0
+fi
+
+# ここから --install。既に入っているものを消すので、消す相手を必ず確かめる。
+if [ -e "$DEST" ]; then
+  EXISTING="$(defaults read "$DEST/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo "")"
+  if [ "$EXISTING" != "$BUNDLE_ID" ]; then
+    echo "$DEST は AgentNotch ではない（CFBundleIdentifier: ${EXISTING:-読めない}）。消さずに中止する。" >&2
+    exit 1
+  fi
+fi
+
+# 動いたまま差し替えると、古いプロセスが消えたバンドルを掴んだままになる。
+if pgrep -f "AgentNotch.app/Contents/MacOS/AgentNotch" >/dev/null; then
+  echo "==> 動いている AgentNotch を終了"
+  pkill -f "AgentNotch.app/Contents/MacOS/AgentNotch" || true
+  for _ in $(seq 20); do
+    pgrep -f "AgentNotch.app/Contents/MacOS/AgentNotch" >/dev/null || break
+    sleep 0.25
+  done
+fi
+
+echo "==> $DEST に入れ替え"
+rm -rf "$DEST"
+ditto "$APP" "$DEST"
+
+# フックが指しているのはアプリの外のコピー。アプリだけ入れ替えると
+# 古いブリッジが残るので、ここで必ず揃える。
+echo "==> ブリッジを更新: $BRIDGE_DIR"
+mkdir -p "$BRIDGE_DIR"
+ditto "$DEST/Contents/MacOS/agentnotch-bridge" "$BRIDGE_DIR/agentnotch-bridge"
+
+echo "==> 起動"
+open "$DEST"
+
 echo
-echo "できたもの: $ZIP"
-echo "リリースに載せる: gh release upload v$VERSION $ZIP"
+echo "AgentNotch $VERSION ($BUILD) を $DEST に入れた。"
+echo "Dock には出ない。メニューバーのアイコンとノッチで確認する。"

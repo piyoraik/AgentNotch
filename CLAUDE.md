@@ -35,7 +35,11 @@ open "$(xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
 
 ## リリース
 
-`Scripts/release.sh` が Release ビルドから `build/AgentNotch-<version>.zip` を作る。GitHub の Release に添付しているのはこれ。
+`Scripts/release.sh` が Release ビルドから `build/AgentNotch-<version>.zip` を作る。GitHub の Release に添付しているのはこれ。`--install` を付けると `/Applications` への入れ替えまで行う。自分のマシンを更新するのはこの経路。
+
+**`--install` はブリッジのコピーも必ず更新する。** フックが指しているのは `~/Library/Application Support/AgentNotch/bin/agentnotch-bridge` で、`.app` の中ではない（アプリを移動するとフックが壊れるため）。アプリだけ入れ替えると古いブリッジが残り、プロトコルを変えた版で噛み合わなくなる。
+
+**入れ替え先は `CFBundleIdentifier` で確かめてから消す。** `rm -rf` する経路なので、`com.piyoraik.AgentNotch` でなければ中止する。`AGENTNOTCH_DEST` で差し替え先を上書きできるのはこの確認をテストするためで、常用しない。
 
 **バージョンは `project.yml` の `MARKETING_VERSION` の 1 箇所だけ。** `Info.plist` の `CFBundleShortVersionString` はそこを参照しており、設定画面の「バージョン」欄（`SettingsView.swift`）が読むのも同じ値。XcodeGen は指定が無いと `1.0` を書き込むので、この参照を外さない。
 

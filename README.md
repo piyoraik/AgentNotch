@@ -109,13 +109,18 @@ xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
 
 ブリッジ（`agentnotch-bridge`）は `AgentNotch` の依存になっているので、このスキームをビルドすれば一緒に建ち、`AgentNotch.app/Contents/MacOS/` に入る。
 
-### 配布用にまとめる
+### 配布用にまとめる / 自分のマシンに入れる
 
 ```bash
-./Scripts/release.sh
+./Scripts/release.sh             # build/AgentNotch-<version>.zip を作る
+./Scripts/release.sh --install   # さらに /Applications に入れ替えて起動し直す
 ```
 
-Release でビルドし、Xcode の ad-hoc 署名が付ける `get-task-allow` を落としてから `build/AgentNotch-<version>.zip` を作る。**バージョンは `project.yml` の `MARKETING_VERSION` だけを直す。** `Info.plist` はそこを参照している。
+Release でビルドし、Xcode の ad-hoc 署名が付ける `get-task-allow` を落としてから zip を作る。**バージョンは `project.yml` の `MARKETING_VERSION` だけを直す。** `Info.plist` はそこを参照している。
+
+`--install` は動いている AgentNotch を終了してから `/Applications/AgentNotch.app` を置き換え、**フックが参照しているブリッジのコピーも更新してから**起動し直す。自分でビルドしたものに quarantine は付かないので `xattr` は要らない。
+
+置き換え先に別のアプリがあった場合は `CFBundleIdentifier` が一致しないので中止する。
 
 ### アイコン
 
