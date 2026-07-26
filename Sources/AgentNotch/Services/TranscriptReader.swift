@@ -105,7 +105,18 @@ enum TranscriptReader {
                 aiTitle = object["aiTitle"] as? String
             case "last-prompt":
                 lastPrompt = object["lastPrompt"] as? String
+            case "user":
+                // 履歴だけが読む項目。日付の解釈は最初の 1 本でしか走らない
+                // ようにガードしてある（プロファイル上いちばん重い処理）。
+                if summary.firstActivity == nil { summary.firstActivity = date(from: object["timestamp"]) }
+                if let cwd = object["cwd"] as? String { summary.cwd = cwd }
+                if let branch = object["gitBranch"] as? String, !branch.isEmpty { summary.gitBranch = branch }
+                if let message = object["message"] as? [String: Any], message["content"] is String {
+                    summary.userTurns += 1
+                }
             case "assistant":
+                if let cwd = object["cwd"] as? String { summary.cwd = cwd }
+                if let branch = object["gitBranch"] as? String, !branch.isEmpty { summary.gitBranch = branch }
                 guard let message = object["message"] as? [String: Any] else { continue }
                 let model = message["model"] as? String
                 if let model { summary.model = model }
@@ -135,14 +146,25 @@ enum TranscriptReader {
                         summary.costByModel[model, default: 0] += cost
                     }
                 }
-                if let date = date(from: object["timestamp"]) { summary.lastActivity = date }
+                if let date = date(from: object["timestamp"]) {
+                    if summary.firstActivity == nil { summary.firstActivity = date }
+                    summary.lastActivity = date
+                }
             default:
                 break
             }
         }
     }
 
-    static func load(from url: URL) -> SessionDetail {
+    /// - Parameters:
+    ///   - messageLimit: `nil` で全発言。ノッチのパネルは末尾だけで足りるが、
+    ///     履歴は途中が読めないと振り返りにならないので上限を外して呼ぶ。
+    ///   - memoryLimit: 同上。
+    static func load(
+        from url: URL,
+        messageLimit: Int? = messageLimit,
+        memoryLimit: Int? = memoryLimit
+    ) -> SessionDetail {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
             return SessionDetail()
         }
@@ -171,8 +193,8 @@ enum TranscriptReader {
             }
         }
 
-        detail.messages = Array(messages.suffix(messageLimit))
-        detail.memories = memories.resolved(limit: memoryLimit)
+        detail.messages = messageLimit.map { Array(messages.suffix($0)) } ?? messages
+        detail.memories = memories.resolved(limit: memoryLimit ?? .max)
         return detail
     }
 

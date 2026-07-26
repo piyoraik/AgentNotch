@@ -11,6 +11,7 @@ final class StatusItemController: NSObject {
     private let settings: AppSettings
     private let openSettings: () -> Void
     private let openReport: () -> Void
+    private let openHistory: () -> Void
     private var statusItem: NSStatusItem?
     /// Built once and filled in on demand; see `rebuildMenu`.
     private let menu = NSMenu()
@@ -26,7 +27,8 @@ final class StatusItemController: NSObject {
         updates: UpdateStore,
         settings: AppSettings = .shared,
         openSettings: @escaping () -> Void,
-        openReport: @escaping () -> Void
+        openReport: @escaping () -> Void,
+        openHistory: @escaping () -> Void
     ) {
         self.monitor = monitor
         self.summaries = summaries
@@ -35,6 +37,7 @@ final class StatusItemController: NSObject {
         self.settings = settings
         self.openSettings = openSettings
         self.openReport = openReport
+        self.openHistory = openHistory
         super.init()
 
         menu.delegate = self
@@ -143,6 +146,16 @@ final class StatusItemController: NSObject {
         }
 
         menu.addItem(.separator())
+        // 履歴は実行中のセッションが 1 本も無くても読めるので、レポートと
+        // 違って常に押せる。中身が無いかどうかはウィンドウ側が言う。
+        let historyItem = NSMenuItem(
+            title: "履歴…",
+            action: #selector(showHistory),
+            keyEquivalent: "y"
+        )
+        historyItem.target = self
+        menu.addItem(historyItem)
+
         let reportItem = NSMenuItem(
             title: "使用状況レポート…",
             action: #selector(showReport),
@@ -206,6 +219,11 @@ final class StatusItemController: NSObject {
     /// パネルをレポート画面で開く。
     @objc private func showReport() {
         openReport()
+    }
+
+    /// 履歴ウィンドウを開く。ノッチのパネルではなく別の窓。
+    @objc private func showHistory() {
+        openHistory()
     }
 
     private func usageItem(for usage: UsageSnapshot) -> NSMenuItem {

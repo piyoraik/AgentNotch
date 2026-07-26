@@ -100,6 +100,20 @@ struct SessionSummary: Equatable {
     var costByModel: [String: Double] = [:]
     var lastActivity: Date?
 
+    // 以下は履歴（`SessionRecord`）が使う項目。実行中の一覧は `ClaudeSession`
+    // から同じことを知れるので読まない。終わったセッションはプロセスも
+    // セッションファイルも残っていないため、トランスクリプト側から拾う。
+
+    /// 最初のレコードの時刻。`lastActivity` との差がセッションの長さになる。
+    var firstActivity: Date?
+    var cwd: String?
+    /// 最後に見えたブランチ。ワークツリーを移ると途中で変わるので、
+    /// 「どこで終わったか」を採る。
+    var gitBranch: String?
+    /// 人が打ったプロンプトの数。`user` レコードには `tool_result` の
+    /// 差し戻しも混ざるので、本文が文字列のものだけを数える。
+    var userTurns = 0
+
     var contextTokens: Int { tokens.context }
     var outputTokens: Int { tokens.output }
 

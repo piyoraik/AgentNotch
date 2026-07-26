@@ -11,9 +11,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hookServer: HookServer!
     private var usage: UsageStore!
     private var updates: UpdateStore!
+    private var history: HistoryStore!
     private var notchController: NotchWindowController!
     private var statusItemController: StatusItemController!
     private var settingsController: SettingsWindowController!
+    /// 押されるまで作らない。窓を建てた時点で SwiftUI のビューが生き始め、
+    /// 誰も見ていない一覧が毎秒の publish で評価され続ける。
+    private var historyController: HistoryWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -41,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updates = UpdateStore(settings: settings)
         updates.start()
 
+        // 履歴は開いたときだけ走査する。ここではまだディスクを読まない。
+        history = HistoryStore()
+
         settingsController = SettingsWindowController(settings: settings, updates: updates, hooks: hooks)
         statusItemController = StatusItemController(
             monitor: monitor,
@@ -51,7 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openSettings: { [weak self] in self?.settingsController.present() },
             // The notch controller is built just below; the closure only runs
             // once the user picks the item, so the ordering is fine.
-            openReport: { [weak self] in self?.notchController.showReport() }
+            openReport: { [weak self] in self?.notchController.showReport() },
+            openHistory: { [weak self] in self?.presentHistory() }
         )
         notchController = NotchWindowController(
             monitor: monitor,
@@ -63,6 +71,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings
         )
         notchController.show()
+    }
+
+    /// 履歴ウィンドウは初回に押されたときだけ建てる。以後は同じ窓を出し直す
+    /// ので、スクロール位置も選択も残る。
+    @MainActor
+    private func presentHistory() {
+        if historyController == nil {
+            historyController = HistoryWindowController(store: history, monitor: monitor, settings: settings)
+        }
+        historyController?.present()
     }
 
     /// Relaunching from the Finder or `open` is the way back in when the user

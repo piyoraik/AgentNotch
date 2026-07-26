@@ -324,16 +324,43 @@ tool_name / tool_input / permission_suggestions
 
 **ルールは必ず一覧から消せるようにしておく。** 一覧はセッション一覧ヘッダーの盾バッジから開く（`AlwaysAllowRulesView`）。押した本人が後から気づけない標準承認は作らない。
 
+## 履歴
+
+メニューバーの「履歴…」（⌘Y）から開く独立したウィンドウ。左に過去セッション、右にその 1 本の全文。`HistoryStore` / `HistoryView` / `HistoryWindowController`。
+
+**履歴の元はトランスクリプトだけ。** `~/.claude/sessions/<pid>.json` は終了したセッションのぶんが残らないので、`ClaudeSession` からは過去を復元できない。`SessionRecord` は `~/.claude/projects/**/*.jsonl` を直接舐めて作る。pid が無いので端末を前面に出す経路も無い（開けるのは cwd とトランスクリプトのファイル）。
+
+**走査はウィンドウを開いたときだけ。** 他のストアと違って `HistoryStore` はタイマーを持たない。履歴は見に行くものなので、`present()` の 1 回だけ走らせる。実測でこのマシンは 22 本・32MB で初回 350ms、mtime とサイズが変わらないファイルは前回の結果をそのまま使い、伸びたファイルは `SummaryScan` のオフセットから追記分だけ読む。
+
+**窓は押されるまで建てない。** `AppDelegate.presentHistory` が初回だけ作る。起動時に作ると、誰も見ていない一覧が `SessionMonitor` の毎秒の publish で評価され続ける。
+
+**`HistoryView` は `SessionMonitor` を購読しない。** 実行中の印が要るのは点（`LiveDot`）と見出しのバッジ（`LiveBadge`）だけなので、`@ObservedObject` はその 2 つに閉じ込める。ルート側で購読すると、1 秒ごとに数百件の発言をぶら下げたツリー全体が作り直される。
+
+**履歴では発言を末尾で切らない。** `TranscriptReader.load` の `messageLimit` / `memoryLimit` に `nil` を渡す。ノッチのパネルは末尾 60 件で足りるが、振り返りは途中が読めないなら開く意味がない。実測 4MB・190 発言で 73ms なので、専用キューで読めば足りる。
+
+**明るい地ではミントを使わない。** `AgentBrand.accent`（ミント）は暗いノッチ用で、標準ウィンドウの白地では読めない。履歴の強調は同じパレットの `AgentBrand.azure`。地の色と文字色は OS の意味色（`.primary` / `.secondary` / `quaternarySystemFill`）に任せ、パネルの「白の不透明度」はここに持ち込まない。
+
+**サイドバーは `NavigationSplitView` で作らない。** SwiftUI 側は表示/非表示ボタンを自前で作るが、置き場所は窓のツールバー前提なので、ツールバーの無い窓では**中身の左上に落ちてタイトルバーと高さが合わない**。器は `NSSplitViewController` ＋ `NSSplitViewItem(sidebarWithViewController:)` にする。素材・幅の記憶・畳んだ状態・`.toggleSidebar` の応答が付いてくる。設定ウィンドウで `TabView` を捨てたのと同じ判断。
+
+**ツールバーは `.toggleSidebar` → `.sidebarTrackingSeparator` → `.flexibleSpace` → 検索の順。** `.sidebarTrackingSeparator` がツールバーの区切りをサイドバーの境目に貼り付ける。外すと、畳んだときに検索欄だけが取り残されて位置がずれる。窓には `.fullSizeContentView` が要る（無いとサイドバーの素材がツールバーの下まで伸びず、上端だけ色が変わる）。SwiftUI 側の `List` は `.scrollContentBackground(.hidden)` にして素材を透かす。
+
+**検索欄はツールバーに置く（`NSSearchToolbarItem`）。** 一覧の中に埋めると macOS の作法と違ううえ、サイドバーを畳んだときに一緒に消える。AppKit の検索欄と SwiftUI の一覧・本文は持ち主が違うので、`HistoryUIState`（`query` / `selection`）を両方が見る。行を選んだときに本文を読ませるのも器（`HistoryWindowController`）の仕事で、どちらのビューの持ち物でもない。
+
+**数字をカードで大きく出さない。** 履歴の主役は会話なので、コスト・トークン・所要時間は見出しの 1 行に畳む。使用状況レポート（`UsageReportView`）と役割が違う。
+
+**やり取りの数は文字列本文の `user` レコードだけ数える。** `user` には `tool_result` の差し戻しが混ざる（実測: 1 セッションで人が打った 11 件に対し tool_result が 222 件）。`last-prompt` の件数も使えない。同じプロンプトが再記録されるため、実測で 63 レコード中 9 種類しかなかった。
+
 ## 構成
 
 ```
 Sources/Bridge/            フックから起動される CLI。依存なしの POSIX ソケット
 Sources/AgentNotch/
-  Models/                  ClaudeSession, SessionDetail, ApprovalRequest, AgentNotice, UsageSnapshot
+  Models/                  ClaudeSession, SessionDetail, SessionRecord, ApprovalRequest,
+                           AgentNotice, UsageSnapshot
   Services/                ファイル監視・パース・ソケットサーバ（HookServer）・フックの配置
                            （HookInstaller）・通知の一元管理（AlertCenter）・端末特定・設定
   Views/                   SwiftUI。NotchContentView が折りたたみ/展開を切り替える
-  Windows/                 NSPanel・設定ウィンドウ・メニューバー。AppKit 側の器
+  Windows/                 NSPanel・設定ウィンドウ・履歴ウィンドウ・メニューバー。AppKit 側の器
 Design/                    アイコンの生成スクリプトと生成された SVG
 Resources/
   Assets.xcassets/         AppIcon（生成物）と ClaudeMark（Claude.app の公式アセット）
