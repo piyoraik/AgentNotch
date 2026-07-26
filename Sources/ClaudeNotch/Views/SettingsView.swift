@@ -1,22 +1,55 @@
 import SwiftUI
 
-struct SettingsView: View {
-    @ObservedObject var settings: AppSettings
+/// One pane of the preferences window. The tab bar itself is an `NSToolbar`
+/// driven by `SettingsWindowController`, not a SwiftUI `TabView`: only a real
+/// toolbar gets the centered, titled preference look, and it lets the window
+/// resize itself to whichever pane is showing.
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case display, menuBar, refresh, approval, general
 
-    var body: some View {
-        TabView {
-            DisplaySettingsView(settings: settings)
-                .tabItem { Label("表示", systemImage: "macwindow") }
-            MenuBarSettingsView(settings: settings)
-                .tabItem { Label("メニューバー", systemImage: "menubar.rectangle") }
-            RefreshSettingsView(settings: settings)
-                .tabItem { Label("更新", systemImage: "arrow.clockwise") }
-            ApprovalSettingsView(settings: settings)
-                .tabItem { Label("承認", systemImage: "checkmark.shield") }
-            GeneralSettingsView(settings: settings)
-                .tabItem { Label("一般", systemImage: "gearshape") }
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .display: return "表示"
+        case .menuBar: return "メニューバー"
+        case .refresh: return "更新"
+        case .approval: return "承認"
+        case .general: return "一般"
         }
-        .frame(width: 460, height: 380)
+    }
+
+    var symbol: String {
+        switch self {
+        case .display: return "macwindow"
+        case .menuBar: return "menubar.rectangle"
+        case .refresh: return "arrow.clockwise"
+        case .approval: return "checkmark.shield"
+        case .general: return "gearshape"
+        }
+    }
+
+    /// Fallback for the rare case where the hosted view reports no intrinsic
+    /// height; the window measures the real content first.
+    var fallbackHeight: CGFloat {
+        switch self {
+        case .display: return 540
+        case .menuBar: return 300
+        case .refresh: return 500
+        case .approval: return 300
+        case .general: return 340
+        }
+    }
+
+    @ViewBuilder
+    func view(settings: AppSettings) -> some View {
+        switch self {
+        case .display: DisplaySettingsView(settings: settings)
+        case .menuBar: MenuBarSettingsView(settings: settings)
+        case .refresh: RefreshSettingsView(settings: settings)
+        case .approval: ApprovalSettingsView(settings: settings)
+        case .general: GeneralSettingsView(settings: settings)
+        }
     }
 }
 
@@ -37,6 +70,13 @@ private struct DisplaySettingsView: View {
                      ? "ノッチに触れると自動で開きます。"
                      : "ノッチをクリックしたときだけ開きます。")
                 .settingsFootnote()
+            }
+
+            Section {
+                Toggle("推定コストを表示", isOn: $settings.showCostEstimates)
+            } footer: {
+                Text("定額プランはトークン単位で課金されないため、表示されるのは同じ処理を従量課金の API で回した場合の換算値です。請求額ではありません。")
+                    .settingsFootnote()
             }
 
             Section("サイズ") {
@@ -138,12 +178,14 @@ private struct RefreshSettingsView: View {
 
             Section("使用量") {
                 Toggle("使用量を取得する", isOn: $settings.usageEnabled)
+                // Floor of a minute: the endpoint is shared with the CLI and
+                // answers 429 when polled harder than that.
                 SliderRow(
                     title: "取得間隔",
                     value: $settings.usageRefreshInterval,
-                    range: 15...600,
-                    step: 15,
-                    format: { $0 < 60 ? "\(Int($0)) 秒" : "\(Int($0 / 60)) 分" }
+                    range: 60...1800,
+                    step: 60,
+                    format: { "\(Int($0 / 60)) 分" }
                 )
                 .disabled(!settings.usageEnabled)
             }
@@ -207,6 +249,19 @@ private struct GeneralSettingsView: View {
             }
 
             Section {
+                HStack(spacing: 10) {
+                    ClaudeMarkView(activity: .idle, size: 28, introduces: true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("ClaudeNotch")
+                            .font(.system(size: 15, weight: .semibold))
+                        Text("Claude Code のセッションをノッチから見る")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 2)
+
                 LabeledContent("バージョン") {
                     Text(Self.version).foregroundStyle(.secondary)
                 }

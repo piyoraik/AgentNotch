@@ -18,9 +18,11 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
 
     private var server: ApprovalServer?
     private let settings: AppSettings
+    private let alwaysAllow: AlwaysAllowStore
 
-    init(settings: AppSettings = .shared) {
+    init(settings: AppSettings = .shared, alwaysAllow: AlwaysAllowStore = .shared) {
         self.settings = settings
+        self.alwaysAllow = alwaysAllow
     }
 
     func start() {
@@ -30,6 +32,13 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
                     respond(.passthrough)
                     return
                 }
+
+                // A standing approval answers silently: no panel, no alert.
+                if self.alwaysAllow.allows(request) {
+                    respond(.allow)
+                    return
+                }
+
                 self.pending.append(Pending(request: request, respond: respond))
                 if self.settings.bounceOnApproval {
                     NSApp.requestUserAttention(.informationalRequest)
@@ -46,5 +55,12 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
     func resolve(_ pending: Pending, with decision: ApprovalDecision) {
         self.pending.removeAll { $0.id == pending.id }
         pending.respond(decision)
+    }
+
+    /// Grants this request and stores a rule so the same thing is allowed
+    /// without asking again.
+    func allowAlways(_ pending: Pending, rule: AlwaysAllowRule) {
+        alwaysAllow.add(rule)
+        resolve(pending, with: .allow)
     }
 }

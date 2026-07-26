@@ -3,24 +3,93 @@ import SwiftUI
 struct SessionDetailView: View {
     let session: ClaudeSession
     let detail: SessionDetail?
+    var showsCost: Bool = true
     var onBack: () -> Void
+
+    /// コピーは押しても画面が変わらないので、チェックに変えて反応を返す。
+    @State private var didCopy = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
 
             if let detail {
+                if showsCost {
+                    costBar(detail)
+                }
                 tokenGrid(detail.tokens)
                 Divider().overlay(Color.white.opacity(0.12))
                 transcript(detail.messages)
             } else {
-                Text("トランスクリプトを読み込み中…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.45))
-                Spacer()
+                loading
             }
         }
         .padding(.horizontal, 14)
+        .animation(Motion.navigate, value: detail == nil)
+    }
+
+    /// 推定コストはトークン数より粗い数字なので、グリッドに混ぜず
+    /// 一段上に置いて「別物」だと分かるようにしている。
+    private func costBar(_ detail: SessionDetail) -> some View {
+        HStack(spacing: 8) {
+            Text("推定コスト")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+
+            Text(TokenPricing.format(detail.costUSD))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(ClaudeBrand.clay)
+                .rollingNumber()
+                .animation(Motion.quick, value: detail.costUSD)
+
+            if detail.tokensByModel.count > 1 {
+                Text("\(detail.tokensByModel.count) モデル")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.35))
+            }
+
+            Spacer(minLength: 4)
+
+            Button {
+                UsageReport.copyToPasteboard(
+                    UsageReport.markdown(session: session, detail: detail)
+                )
+                didCopy = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { didCopy = false }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(didCopy ? "コピーしました" : "コピー")
+                        .font(.system(size: 9, weight: .medium))
+                }
+                .foregroundStyle(didCopy ? Color.green : .white.opacity(0.55))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressableButtonStyle(scale: 0.9))
+            .help("このセッションの内訳を Markdown でコピーする")
+            .animation(Motion.quick, value: didCopy)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(ClaudeBrand.clay.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .staggeredAppear(index: 0)
+    }
+
+    /// 読み込み中はマークを回しておく。JSONL が大きいと数百 ms 空くので、
+    /// 固まったように見えないようにする。
+    private var loading: some View {
+        VStack(spacing: 10) {
+            Spacer(minLength: 12)
+            ClaudeMarkView(activity: .busy, size: 28)
+            Text("トランスクリプトを読み込み中…")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.45))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .transition(.opacity)
     }
 
     private var header: some View {
@@ -30,8 +99,10 @@ struct SessionDetailView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.7))
+                        .padding(3)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(scale: 0.85))
 
                 Text(detail?.title ?? session.displayName)
                     .font(.system(size: 13, weight: .semibold))
@@ -49,16 +120,20 @@ struct SessionDetailView: View {
                         .padding(3)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableButtonStyle(scale: 0.85))
                 .help("このセッションのターミナルを前面に出す")
 
-                Text(session.isBusy ? "busy" : "idle")
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(session.isBusy ? Color.green.opacity(0.2) : Color.white.opacity(0.12))
-                    .foregroundStyle(session.isBusy ? Color.green : Color.white.opacity(0.6))
-                    .clipShape(Capsule())
+                HStack(spacing: 4) {
+                    PulsingDot(isActive: session.isBusy, size: 5)
+                    Text(session.isBusy ? "busy" : "idle")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(session.isBusy ? Color.green.opacity(0.2) : Color.white.opacity(0.12))
+                .foregroundStyle(session.isBusy ? Color.green : Color.white.opacity(0.6))
+                .clipShape(Capsule())
+                .animation(Motion.quick, value: session.isBusy)
             }
 
             Text(session.cwd)
@@ -77,10 +152,10 @@ struct SessionDetailView: View {
 
     private func tokenGrid(_ tokens: TokenStats) -> some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
-            tokenCell("Context", tokens.context, tint: .cyan)
-            tokenCell("Output", tokens.output, tint: .purple)
-            tokenCell("Cache read", tokens.cacheRead, tint: .green)
-            tokenCell("Cache write", tokens.cacheWrite, tint: .orange)
+            tokenCell("Context", tokens.context, tint: .cyan).staggeredAppear(index: 0)
+            tokenCell("Output", tokens.output, tint: .purple).staggeredAppear(index: 1)
+            tokenCell("Cache read", tokens.cacheRead, tint: .green).staggeredAppear(index: 2)
+            tokenCell("Cache write", tokens.cacheWrite, tint: .orange).staggeredAppear(index: 3)
         }
     }
 
@@ -92,6 +167,8 @@ struct SessionDetailView: View {
             Text(format(value))
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(tint)
+                .rollingNumber()
+                .animation(Motion.quick, value: value)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
@@ -104,15 +181,23 @@ struct SessionDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(messages) { message in
-                        MessageBubble(message: message).id(message.id)
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        MessageBubble(message: message)
+                            .id(message.id)
+                            .staggeredAppear(index: min(index, 6), offset: 12)
+                            // 追記は下から積み上がる。ポーリングで一気に
+                            // 差し込まれても流れが読めるようにする。
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 .padding(.bottom, 8)
+                .animation(Motion.navigate, value: messages.count)
             }
             .onChange(of: messages.last?.id) { _, last in
                 guard let last else { return }
-                withAnimation { proxy.scrollTo(last, anchor: .bottom) }
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                    proxy.scrollTo(last, anchor: .bottom)
+                }
             }
         }
     }
@@ -133,9 +218,16 @@ private struct MessageBubble: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(message.role == .user ? "You" : "Claude")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(message.role == .user ? Color.cyan.opacity(0.8) : Color.orange.opacity(0.8))
+            HStack(spacing: 4) {
+                if message.role != .user {
+                    ClaudeMarkView(activity: .idle, size: 9)
+                }
+                Text(message.role == .user ? "You" : "Claude")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(message.role == .user
+                                     ? Color.cyan.opacity(0.8)
+                                     : ClaudeBrand.clay.opacity(0.95))
+            }
 
             if !message.text.isEmpty {
                 Text(message.text)

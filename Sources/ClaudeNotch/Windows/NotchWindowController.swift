@@ -170,8 +170,13 @@ final class NotchWindowController: NSWindowController {
         let target = expanded ? expandedFrame : collapsedFrame
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.22
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            // 開くときは少し粘って伸び、閉じるときは素早く畳む。SwiftUI 側の
+            // `Motion.expand` と体感を合わせた値。
+            context.duration = expanded ? 0.3 : 0.22
+            context.timingFunction = expanded
+                ? CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)
+                : CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+            context.allowsImplicitAnimation = true
             window.animator().setFrame(target, display: true)
         }
     }

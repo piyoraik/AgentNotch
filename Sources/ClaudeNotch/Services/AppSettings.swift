@@ -17,6 +17,9 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
     @Published var showNotchPanel: Bool { didSet { write(.showNotchPanel, showNotchPanel) } }
     @Published var expandOnHover: Bool { didSet { write(.expandOnHover, expandOnHover) } }
     @Published var showUsageInNotch: Bool { didSet { write(.showUsageInNotch, showUsageInNotch) } }
+    /// Cost figures are an API-equivalent estimate, not a bill, so they can be
+    /// turned off for anyone who would rather not see a number they can't act on.
+    @Published var showCostEstimates: Bool { didSet { write(.showCostEstimates, showCostEstimates) } }
     /// How far the pill extends past each side of the physical notch.
     @Published var wingWidth: Double { didSet { write(.wingWidth, wingWidth) } }
     @Published var panelWidth: Double { didSet { write(.panelWidth, panelWidth) } }
@@ -44,6 +47,11 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
     @Published var playSoundOnApproval: Bool { didSet { write(.playSoundOnApproval, playSoundOnApproval) } }
     @Published var approvalSoundName: String { didSet { write(.approvalSoundName, approvalSoundName) } }
 
+    // MARK: - ウィンドウの状態
+
+    /// Which pane the preferences window reopens on. Not user-facing.
+    @Published var lastSettingsPane: String { didSet { write(.lastSettingsPane, lastSettingsPane) } }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -57,6 +65,7 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         showNotchPanel = flag(.showNotchPanel, true)
         expandOnHover = flag(.expandOnHover, true)
         showUsageInNotch = flag(.showUsageInNotch, true)
+        showCostEstimates = flag(.showCostEstimates, true)
         wingWidth = number(.wingWidth, 98)
         panelWidth = number(.panelWidth, 440)
         panelHeight = number(.panelHeight, 560)
@@ -70,12 +79,13 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         summaryPollInterval = number(.summaryPollInterval, 2.0)
         transcriptPollInterval = number(.transcriptPollInterval, 1.5)
         usageEnabled = flag(.usageEnabled, true)
-        usageRefreshInterval = number(.usageRefreshInterval, 60)
+        usageRefreshInterval = number(.usageRefreshInterval, 900)
 
         autoOpenOnApproval = flag(.autoOpenOnApproval, true)
         bounceOnApproval = flag(.bounceOnApproval, true)
         playSoundOnApproval = flag(.playSoundOnApproval, false)
         approvalSoundName = defaults.string(forKey: Key.approvalSoundName.rawValue) ?? "Ping"
+        lastSettingsPane = defaults.string(forKey: Key.lastSettingsPane.rawValue) ?? "display"
     }
 
     /// Wipes every stored key and reloads the defaults, so the reset lands in
@@ -88,6 +98,7 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         showNotchPanel = true
         expandOnHover = true
         showUsageInNotch = true
+        showCostEstimates = true
         wingWidth = 98
         panelWidth = 440
         panelHeight = 560
@@ -101,12 +112,13 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         summaryPollInterval = 2.0
         transcriptPollInterval = 1.5
         usageEnabled = true
-        usageRefreshInterval = 60
+        usageRefreshInterval = 900
 
         autoOpenOnApproval = true
         bounceOnApproval = true
         playSoundOnApproval = false
         approvalSoundName = "Ping"
+        lastSettingsPane = "display"
     }
 
     private func write(_ key: Key, _ value: Any) {
@@ -114,11 +126,13 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
     }
 
     private enum Key: String, CaseIterable {
-        case showNotchPanel, expandOnHover, showUsageInNotch, wingWidth, panelWidth, panelHeight
+        case showNotchPanel, expandOnHover, showUsageInNotch, showCostEstimates
+        case wingWidth, panelWidth, panelHeight
         case showStatusItem, showSessionCountInMenuBar, showUsageInMenu, showSessionTitlesInMenu
         case sessionPollInterval, summaryPollInterval, transcriptPollInterval
         case usageEnabled, usageRefreshInterval
         case autoOpenOnApproval, bounceOnApproval, playSoundOnApproval, approvalSoundName
+        case lastSettingsPane
     }
 }
 

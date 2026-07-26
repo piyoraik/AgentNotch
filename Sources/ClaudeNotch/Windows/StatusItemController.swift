@@ -11,6 +11,9 @@ final class StatusItemController: NSObject {
     private let openSettings: () -> Void
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
+    /// メニューバーのアイコンは動かせないので、動作中だけ色を変えて
+    /// 状態を出す。描き直しは状態が変わったときだけ。
+    private var isBusy = false
 
     init(
         monitor: SessionMonitor,
@@ -52,12 +55,11 @@ final class StatusItemController: NSObject {
     private func setStatusItemVisible(_ visible: Bool) {
         if visible, statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.image = NSImage(
-                systemSymbolName: "sparkle",
-                accessibilityDescription: "Claude Code sessions"
-            )
+            item.button?.image = ClaudeMark.statusImage(busy: false)
+            item.button?.image?.accessibilityDescription = "Claude Code sessions"
             item.button?.imagePosition = .imageLeading
             statusItem = item
+            isBusy = false
             update()
         } else if !visible, let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
@@ -71,6 +73,13 @@ final class StatusItemController: NSObject {
         let summaries = self.summaries.summaries
 
         statusItem.button?.title = settings.showSessionCountInMenuBar ? " \(sessions.count)" : ""
+
+        let busy = sessions.contains(where: \.isBusy)
+        if busy != isBusy {
+            isBusy = busy
+            statusItem.button?.image = ClaudeMark.statusImage(busy: busy)
+            statusItem.button?.image?.accessibilityDescription = "Claude Code sessions"
+        }
 
         let menu = NSMenu()
         if settings.showUsageInMenu, settings.usageEnabled {
@@ -95,7 +104,10 @@ final class StatusItemController: NSObject {
                     let context = SessionSummary.abbreviate(summary.contextTokens)
                     let output = SessionSummary.abbreviate(summary.outputTokens)
                     item.toolTip = summary.title
-                    let subtitle = "\(summary.title ?? "—")  —  \(context) ctx / \(output) out"
+                    var subtitle = "\(summary.title ?? "—")  —  \(context) ctx / \(output) out"
+                    if settings.showCostEstimates {
+                        subtitle += " / \(TokenPricing.format(summary.costUSD))"
+                    }
                     item.attributedTitle = NSAttributedString(
                         string: "\(marker) \(session.projectName)\n\(subtitle)",
                         attributes: [.font: NSFont.menuFont(ofSize: 13)]
@@ -104,6 +116,10 @@ final class StatusItemController: NSObject {
                 menu.addItem(item)
             }
         }
+
+        menu.addItem(.separator())
+        menu.addItem(exportItem(title: "使用状況をコピー", action: #selector(copyReport), key: "c"))
+        menu.addItem(exportItem(title: "レポートを保存…", action: #selector(saveReport), key: "s"))
 
         menu.addItem(.separator())
         let settingsItem = NSMenuItem(
@@ -121,6 +137,37 @@ final class StatusItemController: NSObject {
 
     @objc private func showSettings() {
         openSettings()
+    }
+
+    // MARK: - 書き出し
+
+    private func exportItem(title: String, action: Selector, key: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = [.command, .shift]
+        item.target = self
+        // 中身がないレポートを出せてしまうと、コピーしたのかどうかが
+        // 分からなくなるので、セッションがないときは押せなくする。
+        item.isEnabled = !monitor.sessions.isEmpty
+        return item
+    }
+
+    /// Markdown をクリップボードへ。貼り先が決まっていない用途はこちら。
+    @objc private func copyReport() {
+        UsageReport.copyToPasteboard(
+            UsageReport.markdown(
+                sessions: monitor.sessions,
+                summaries: summaries.summaries,
+                usage: usage.snapshot
+            )
+        )
+    }
+
+    /// CSV をファイルへ。表計算で集計したい用途はこちら。
+    @objc private func saveReport() {
+        UsageReport.save(
+            UsageReport.csv(sessions: monitor.sessions, summaries: summaries.summaries),
+            suggestedName: UsageReport.fileName(extension: "csv")
+        )
     }
 
     private func usageItem(for usage: UsageSnapshot) -> NSMenuItem {

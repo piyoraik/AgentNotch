@@ -48,6 +48,12 @@ open "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
 
 **ファイル読み込みは mtime でガードする。** `SummaryStore` と `TranscriptStore` は更新日時が変わったときだけ再パースする。毎秒の再読み込みはしない。
 
+**トランスクリプトをメインスレッドで読まない。** 実測でセッション 1 本あたり 1.6MB・全文パース 17ms。これをメインスレッドで 2 秒ごとに回していたためパネルのアニメーションが引っかかっていた。`SummaryStore` / `TranscriptStore` は専用の `DispatchQueue` で読み、結果だけ main に戻す。
+
+**要約は差分だけ読む。** `TranscriptReader.scanSummary(from:resuming:)` が前回のバイトオフセットから追記分だけを読む（1 ティック 0.14ms）。追記途中の行は最後の改行までで切って次回に回し、ファイルが縮んでいたら（コンパクション）先頭から読み直す。`loadSummary` は全文版のままだが、ポーリング経路では使わない。
+
+**`ISO8601DateFormatter` を毎回 new しない。** タイムスタンプ 1 行ごとの生成がプロファイル上の最大コストだった。値型で `Sendable` な `Date.ISO8601FormatStyle` を static で共有する。
+
 **トークンは保持しない。** CLI がおよそ 1 時間ごとにローテートするため、`ClaudeCredentials.accessToken()` を毎回呼ぶ。
 
 **UI を全部隠せる状態を作らない。** メニューバーアイコンとノッチパネルは個別に非表示にできるが、両方消しても `applicationShouldHandleReopen` で設定ウィンドウに戻れる。承認待ちが発生したときは `showNotchPanel` が false でもパネルを前面に出す（`NotchWindowController` の `approvals.$pending` 監視）。ブロックされたセッションに応答できない状態を作らないため。
@@ -56,9 +62,19 @@ open "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
 
 strict concurrency が有効なため、以下の型を踏襲する。
 
-- バックグラウンドから値を受け取る `ObservableObject` は `@unchecked Sendable` にし、`DispatchQueue.main.async` で必ず main に跳ばしてから `@Published` を触る（`ApprovalStore` / `UsageStore`）。
+- バックグラウンドから値を受け取る `ObservableObject` は `@unchecked Sendable` にし、`DispatchQueue.main.async` で必ず main に跳ばしてから `@Published` を触る（`ApprovalStore` / `UsageStore` / `SummaryStore` / `TranscriptStore`）。どのプロパティをどのキューが所有するかはコメントで明示する（`SummaryStore.cache` は専用キュー、`summaries` は main）。
 - `deinit` から非 Sendable なプロパティに触れない。アプリ生存期間中ずっと生きるオブジェクトの `NSEvent` モニタは解放しない方針にしている（`NotchWindowController.clickMonitor`）。
 - `Timer.scheduledTimer` のクロージャは main 分離ではないので、`@MainActor` を付けたクラスからは使えない。既存のストアはあえて素のクラスにしている。
+
+## 設定
+
+`AppSettings`（`Services/AppSettings.swift`）が唯一の設定の置き場。`UserDefaults` に永続化し、`@Published` で配る。
+
+- 各ストアは `AppSettings.shared` を既定引数で受け取り、間隔の `@Published` を購読して**タイマーを張り直す**（`restartTimer(interval:)`）。定数のポーリング間隔を新しく埋め込まない。
+- 新しい設定を足すときは、`Key` に追加 → `init` の読み込み → `resetToDefaults()` の 3 箇所を揃える。どれか一つでも漏れるとリセットが効かない。
+- 設定ウィンドウは `SettingsWindowController` が持つ AppKit の `NSWindow`。`Settings` シーンは空のまま（`App` にシーンが要るだけ）。アクセサリアプリはウィンドウを前面に出しただけでは活性化しないので、`present()` で `NSApp.activate` してから `makeKeyAndOrderFront` する。
+- ペインの切り替えは `toolbarStyle = .preference` の `NSToolbar`。SwiftUI の `TabView` は `Settings` シーンの外だと囲み付きのインラインタブとして描かれるので使わない。ペインを増やすときは `SettingsPane` に case を足すだけでツールバーもショートカットも追随する。
+- ウィンドウの高さはペインごとに `fittingSize` を測って合わせる（`SettingsPane.fallbackHeight` は測れなかったときの保険）。全ペイン共通の固定サイズにしない。
 
 ## 承認プロトコル
 
@@ -80,9 +96,9 @@ app → bridge   {"behavior":"allow"} または {"behavior":"deny"} + "\n"
 Sources/Bridge/            フックから起動される CLI。依存なしの POSIX ソケット
 Sources/ClaudeNotch/
   Models/                  ClaudeSession, SessionDetail, ApprovalRequest, UsageSnapshot
-  Services/                ファイル監視・パース・ソケットサーバ・端末特定
+  Services/                ファイル監視・パース・ソケットサーバ・端末特定・設定
   Views/                   SwiftUI。NotchContentView が折りたたみ/展開を切り替える
-  Windows/                 NSPanel とメニューバー。AppKit 側の器
+  Windows/                 NSPanel・設定ウィンドウ・メニューバー。AppKit 側の器
 ```
 
 `NotchWindow` は `.nonactivatingPanel` かつ `canBecomeKey = false`。ターミナルからフォーカスを奪わないための設計なので、ここを変えるとタイピング中に入力を吸ってしまう。

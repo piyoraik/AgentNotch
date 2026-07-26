@@ -3,7 +3,10 @@ import Foundation
 
 /// Loads and refreshes the transcript for whichever session is selected,
 /// re-reading only when the file's modification date changes.
-final class TranscriptStore: ObservableObject {
+///
+/// `@unchecked Sendable` because the parse runs on a background queue; the
+/// published detail is only assigned on main.
+final class TranscriptStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var detail: SessionDetail?
 
     private var session: ClaudeSession?
@@ -11,6 +14,9 @@ final class TranscriptStore: ObservableObject {
     private var lastModified: Date?
     private var timer: Timer?
     private var cancellable: AnyCancellable?
+
+    private let queue = DispatchQueue(label: "com.piyoraik.ClaudeNotch.transcript", qos: .userInitiated)
+    private var isLoading = false
 
     init(settings: AppSettings = .shared) {
         cancellable = settings.$transcriptPollInterval
@@ -36,17 +42,41 @@ final class TranscriptStore: ObservableObject {
         self.session = session
         self.lastModified = nil
         self.detail = nil
-        self.url = session.flatMap(TranscriptReader.transcriptURL(for:))
-        refresh()
+        self.url = nil
+
+        guard let session else { return }
+        // Resolving the path can walk every project directory, so it waits for
+        // the background queue along with the parse.
+        queue.async { [weak self] in
+            let url = TranscriptReader.transcriptURL(for: session)
+            DispatchQueue.main.async {
+                // The user may have moved on while we were looking.
+                guard let self, self.session?.sessionId == session.sessionId else { return }
+                self.url = url
+                self.refresh()
+            }
+        }
     }
 
     private func refresh() {
-        guard let url else { return }
+        guard let url, !isLoading else { return }
 
         let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
         if let modified, modified == lastModified { return }
         lastModified = modified
 
-        detail = TranscriptReader.load(from: url)
+        isLoading = true
+        let expected = session?.sessionId
+        queue.async { [weak self] in
+            let detail = TranscriptReader.load(from: url)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isLoading = false
+                guard self.session?.sessionId == expected else { return }
+                if detail != self.detail {
+                    self.detail = detail
+                }
+            }
+        }
     }
 }

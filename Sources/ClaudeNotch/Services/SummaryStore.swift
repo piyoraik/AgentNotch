@@ -1,18 +1,25 @@
 import Combine
 import Foundation
 
-/// Keeps a lightweight summary for every live session, re-parsing a
-/// transcript only when its file actually changes.
-final class SummaryStore: ObservableObject {
+/// Keeps a lightweight summary for every live session, reading only the bytes
+/// a transcript has grown by since the last pass.
+///
+/// `@unchecked Sendable` because the scan runs on a background queue: `cache`
+/// is touched only there, `summaries` only on main.
+final class SummaryStore: ObservableObject, @unchecked Sendable {
     @Published private(set) var summaries: [String: SessionSummary] = [:]
 
     private struct CacheEntry {
         let url: URL
         var modified: Date?
-        var summary: SessionSummary
+        var scan: TranscriptReader.SummaryScan
     }
 
+    /// Owned by `queue`.
     private var cache: [String: CacheEntry] = [:]
+    private let queue = DispatchQueue(label: "com.piyoraik.ClaudeNotch.summaries", qos: .utility)
+    private var isScanning = false
+
     private var cancellables = Set<AnyCancellable>()
     private var timer: Timer?
     private var lastSessions: [ClaudeSession] = []
@@ -48,6 +55,24 @@ final class SummaryStore: ObservableObject {
     }
 
     private func refresh(for sessions: [ClaudeSession]) {
+        // Reading and parsing megabytes of JSONL on the main thread is what
+        // made the panel animation stutter; only the publish happens there.
+        guard !isScanning else { return }
+        isScanning = true
+
+        queue.async { [weak self] in
+            guard let self else { return }
+            let next = self.scan(sessions)
+            DispatchQueue.main.async {
+                self.isScanning = false
+                if next != self.summaries {
+                    self.summaries = next
+                }
+            }
+        }
+    }
+
+    private func scan(_ sessions: [ClaudeSession]) -> [String: SessionSummary] {
         let liveIds = Set(sessions.map(\.sessionId))
         cache = cache.filter { liveIds.contains($0.key) }
 
@@ -68,13 +93,10 @@ final class SummaryStore: ObservableObject {
                 continue
             }
 
-            let summary = TranscriptReader.loadSummary(from: url)
-            cache[id] = CacheEntry(url: url, modified: modified, summary: summary)
+            let scan = TranscriptReader.scanSummary(from: url, resuming: cache[id]?.scan ?? .init())
+            cache[id] = CacheEntry(url: url, modified: modified, scan: scan)
         }
 
-        let next = cache.mapValues(\.summary)
-        if next != summaries {
-            summaries = next
-        }
+        return cache.mapValues(\.scan.summary)
     }
 }

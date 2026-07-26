@@ -8,6 +8,7 @@ final class NotchUIState: ObservableObject {
     /// Set when the user clicks into the panel, keeping it open while they read.
     @Published var isPinned = false
     @Published var selectedSessionId: String?
+    @Published var showingAlwaysAllowRules = false
 
     var isExpanded: Bool { isHovering || isPinned }
 
@@ -15,5 +16,6 @@ final class NotchUIState: ObservableObject {
         isPinned = false
         isHovering = false
         selectedSessionId = nil
+        showingAlwaysAllowRules = false
     }
 }
