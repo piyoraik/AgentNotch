@@ -58,7 +58,7 @@ gh release upload v<version> build/AgentNotch-<version>.zip
 
 **リリースには zip と `.sig` を必ず揃えて載せる。** アプリの自動更新は署名の付いていないリリースを無視する（`UpdateStore.parseRelease` が `.sig` の無い資産を弾く）ので、署名を忘れたリリースは「配ったのに誰にも届かない」形になる。`Scripts/release.sh` が署名まで面倒を見るので、手で zip を作って上げない。
 
-**リリース鍵を失くさない・リポジトリに入れない。** 秘密鍵は `~/.config/agentnotch/release-key`（0600）、公開鍵は `ReleaseSignature.swift` に直書き。この 2 つが対でないと更新が通らない。GitHub に置いてある物だけで署名を作れないことが、この仕組みが守っている唯一のもの。**鍵を作り直すと、既に配った版はアプリから更新できなくなる**（手で入れ替えてもらうしかない）。`release.sh` は署名後にアプリ側の公開鍵で検証し直して、食い違ったまま配れないようにしてある。
+**リリース鍵を失くさない・リポジトリに入れない。** 秘密鍵は `~/.config/agentnotch/release-key`（0600）、公開鍵は `ReleaseSignature.swift` に直書き。この 2 つが対でないと更新が通らない。GitHub に置いてある物だけで署名を作れないことが、この仕組みが守っている唯一のもの。**鍵を作り直すと、既に配った版はアプリから更新できなくなる**（手で入れ替えてもらうしかない）。`release.sh` は署名後にアプリ側の公開鍵で検証し直して、食い違ったまま配れないようにしてある。鍵は初回だけ `swift Scripts/signing.swift keygen` で作り、出力された公開鍵を `ReleaseSignature.swift` に貼る。
 
 受け取る側は `xattr -dr com.apple.quarantine` が要る。**この手間を README から消さない。** `LSUIElement` で Dock アイコンが出ないため、Gatekeeper に止められたのか起動したのかが区別できず、外し方が書いていないと「動かない」で終わる。
 
@@ -226,10 +226,15 @@ tool_name / tool_input / permission_suggestions
 
 | ツール | 使う項目 |
 | --- | --- |
-| Bash | `command` と `description`（`description` が見出しになる） |
-| Edit | `file_path` / `old_string` / `new_string` → 差分表示 |
+| Bash / BashOutput | `command` と `description`（`description` が見出しになる） |
+| Edit / NotebookEdit | `file_path` / `old_string`（または `old_source`）/ `new_string`（または `new_source`）→ 差分表示 |
 | Write | `file_path` / `content` |
 | Read | `file_path` のみ（本文なし） |
+| Glob / Grep | `pattern` / `path`（見出し） |
+| WebFetch / WebSearch | `url` または `query` |
+| それ以外 | `tool_input` を整形した JSON をそのまま表示。見出しは `command` / `file_path` / `path` / `url` / `pattern` / `prompt` のうち最初に見つかった非空文字列 |
+
+新しいツールを特別扱いするときは `ApprovalRequest.interpret` の `switch` に追記し、この表も一緒に直す。
 
 `permission_suggestions` には CLI 自身が出す候補が入る。`addRules` の `ruleContent`（`xcodegen generate *` など）だけを拾い、`setMode` は捨てる。**フックが返せるのは `behavior` と `updatedInput` だけで、モード変更やルール追加は返せない**ため、`setMode` を UI に出しても実行できない。
 
@@ -267,6 +272,9 @@ Design/                    アイコンの生成スクリプトと生成され�
 Resources/
   Assets.xcassets/         AppIcon（生成物）と ClaudeMark（Claude.app の公式アセット）
   Info.plist               project.yml からの生成物。.gitignore 済み
+Scripts/
+  release.sh               ビルド → 署名 → zip。--install で /Applications に入れ替え
+  signing.swift            リリース鍵の keygen / 署名 / 検証（release.sh から呼ばれる）
 ```
 
 `NotchWindow` は `.nonactivatingPanel` かつ `canBecomeKey = false`。ターミナルからフォーカスを奪わないための設計なので、ここを変えるとタイピング中に入力を吸ってしまう。
