@@ -7,6 +7,7 @@ final class StatusItemController: NSObject {
     private let monitor: SessionMonitor
     private let summaries: SummaryStore
     private let usage: UsageStore
+    private let updates: UpdateStore
     private let settings: AppSettings
     private let openSettings: () -> Void
     private let openReport: () -> Void
@@ -22,6 +23,7 @@ final class StatusItemController: NSObject {
         monitor: SessionMonitor,
         summaries: SummaryStore,
         usage: UsageStore,
+        updates: UpdateStore,
         settings: AppSettings = .shared,
         openSettings: @escaping () -> Void,
         openReport: @escaping () -> Void
@@ -29,6 +31,7 @@ final class StatusItemController: NSObject {
         self.monitor = monitor
         self.summaries = summaries
         self.usage = usage
+        self.updates = updates
         self.settings = settings
         self.openSettings = openSettings
         self.openReport = openReport
@@ -152,6 +155,15 @@ final class StatusItemController: NSObject {
         reportItem.isEnabled = !sessions.isEmpty
         menu.addItem(reportItem)
 
+        // 設定を開かないと更新に気づけない、という状態を作らない。降ってきた
+        // ことだけ知らせて、実際に入れ替えるかは設定画面で決めてもらう。
+        if let waiting = updateTitle() {
+            menu.addItem(.separator())
+            let item = NSMenuItem(title: waiting, action: #selector(showSettings), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+
         menu.addItem(.separator())
         let settingsItem = NSMenuItem(
             title: "設定…",
@@ -167,6 +179,16 @@ final class StatusItemController: NSObject {
 
     @objc private func showSettings() {
         openSettings()
+    }
+
+    /// Only the two states worth interrupting for: something to fetch, or
+    /// something already fetched and waiting on a restart.
+    private func updateTitle() -> String? {
+        switch updates.phase {
+        case .available(let update): return "バージョン \(update.version) があります…"
+        case .staged(let update): return "\(update.version) を適用する準備ができました…"
+        default: return nil
+        }
     }
 
     @objc private func revealSession(_ sender: NSMenuItem) {

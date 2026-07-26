@@ -51,6 +51,12 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
     @Published var playSoundOnApproval: Bool { didSet { write(.playSoundOnApproval, playSoundOnApproval) } }
     @Published var approvalSoundName: String { didSet { write(.approvalSoundName, approvalSoundName) } }
 
+    // MARK: - ソフトウェア更新
+
+    /// Whether to ask GitHub for a newer release once a day. Checking is the
+    /// only automatic part; downloading and installing always wait for a press.
+    @Published var automaticUpdateChecks: Bool { didSet { write(.automaticUpdateChecks, automaticUpdateChecks) } }
+
     // MARK: - ウィンドウの状態
 
     /// Which pane the preferences window reopens on. Not user-facing.
@@ -90,6 +96,7 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         bounceOnApproval = flag(.bounceOnApproval, true)
         playSoundOnApproval = flag(.playSoundOnApproval, false)
         approvalSoundName = defaults.string(forKey: Key.approvalSoundName.rawValue) ?? "Ping"
+        automaticUpdateChecks = flag(.automaticUpdateChecks, true)
         lastSettingsPane = defaults.string(forKey: Key.lastSettingsPane.rawValue) ?? "general"
     }
 
@@ -124,6 +131,7 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         bounceOnApproval = true
         playSoundOnApproval = false
         approvalSoundName = "Ping"
+        automaticUpdateChecks = true
         lastSettingsPane = "general"
     }
 
@@ -139,6 +147,7 @@ final class AppSettings: ObservableObject, @unchecked Sendable {
         case sessionPollInterval, summaryPollInterval, transcriptPollInterval
         case usageEnabled, usageRefreshInterval
         case autoOpenOnApproval, bounceOnApproval, playSoundOnApproval, approvalSoundName
+        case automaticUpdateChecks
         case lastSettingsPane
     }
 }

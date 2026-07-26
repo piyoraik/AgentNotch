@@ -47,9 +47,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     }
 
     @ViewBuilder
-    func view(settings: AppSettings) -> some View {
+    func view(settings: AppSettings, updates: UpdateStore) -> some View {
         switch self {
-        case .general: GeneralSettingsView(settings: settings)
+        case .general: GeneralSettingsView(settings: settings, updates: updates)
         case .display: DisplaySettingsView(settings: settings)
         case .menuBar: MenuBarSettingsView(settings: settings)
         case .approval: ApprovalSettingsView(settings: settings)
@@ -248,6 +248,7 @@ private struct ApprovalSettingsView: View {
 
 private struct GeneralSettingsView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var updates: UpdateStore
     @State private var isConfirmingReset = false
 
     var body: some View {
@@ -286,6 +287,8 @@ private struct GeneralSettingsView: View {
                         .textSelection(.enabled)
                 }
             }
+
+            UpdateSection(settings: settings, updates: updates)
 
             Section {
                 HStack {
@@ -354,6 +357,110 @@ private struct DisplayPickerRow: View {
         }
         if display.hasNotch { text += " · ノッチあり" }
         return text
+    }
+}
+
+// MARK: - ソフトウェア更新
+
+/// The update controls, kept out of `GeneralSettingsView` because the phase
+/// machine needs more branching than the rest of that pane put together.
+///
+/// Checking happens on its own; downloading and installing never do. Replacing
+/// the running app is not something to discover after the fact, and the
+/// archive is unsigned by Apple — the only thing vouching for it is our own
+/// signature, so the user gets to decide when to trust it.
+private struct UpdateSection: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var updates: UpdateStore
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        Section {
+            Toggle("自動的に更新を確認", isOn: $settings.automaticUpdateChecks)
+                .disabled(updates.installBlock != nil)
+
+            HStack(spacing: 8) {
+                status
+                Spacer(minLength: 12)
+                action
+            }
+        } header: {
+            Text("ソフトウェア更新")
+        } footer: {
+            Text(footnote).settingsFootnote()
+        }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        switch updates.phase {
+        case .idle:
+            Text(lastChecked).foregroundStyle(.secondary)
+        case .checking:
+            busy("確認中…")
+        case .upToDate:
+            Text("最新です").foregroundStyle(.secondary)
+        case .available(let update):
+            HStack(spacing: 6) {
+                Text("バージョン \(update.version.description) があります")
+                if let page = update.pageURL {
+                    Button("内容") { openURL(page) }
+                        .buttonStyle(.link)
+                }
+            }
+        case .downloading:
+            busy("ダウンロード中…")
+        case .verifying:
+            busy("署名を検証中…")
+        case .staged(let update):
+            Text("\(update.version.description) の準備ができました")
+        case .installing:
+            busy("再起動しています…")
+        case .failed(let message):
+            Text(message)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .help(message)
+        }
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch updates.phase {
+        case .checking, .downloading, .verifying, .installing:
+            EmptyView()
+        case .available:
+            Button("ダウンロード") { updates.download() }
+                .disabled(updates.installBlock != nil)
+        case .staged:
+            Button("再起動して適用") { updates.install() }
+                .keyboardShortcut(.defaultAction)
+        default:
+            Button("更新を確認") { updates.check() }
+                .disabled(updates.installBlock != nil)
+        }
+    }
+
+    private func busy(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(label).foregroundStyle(.secondary)
+        }
+    }
+
+    private var lastChecked: String {
+        guard let date = updates.lastCheckedAt else { return "まだ確認していません" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "ja_JP")
+        return "最終確認: \(formatter.localizedString(for: date, relativeTo: Date()))"
+    }
+
+    private var footnote: String {
+        if let block = updates.installBlock { return block }
+        return """
+        非公開リポジトリのため、確認と取得には gh コマンドのログインを使います。\
+        配布物は署名を検証してから入れ替えます。
+        """
     }
 }
 

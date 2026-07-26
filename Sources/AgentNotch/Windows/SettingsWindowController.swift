@@ -11,6 +11,7 @@ import SwiftUI
 /// each pane size the window to its own content.
 final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
     private let settings: AppSettings
+    private let updates: UpdateStore
     private var pane: SettingsPane
     /// Kept alive per pane so scroll position and control focus survive a
     /// round trip through the tab bar.
@@ -21,8 +22,9 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
 
     private static let contentWidth: CGFloat = 500
 
-    init(settings: AppSettings = .shared) {
+    init(settings: AppSettings = .shared, updates: UpdateStore) {
         self.settings = settings
+        self.updates = updates
         // 旧バージョンが書いた "refresh" のような値もここで先頭ペインに落ちる。
         pane = SettingsPane(rawValue: settings.lastSettingsPane) ?? .general
 
@@ -102,7 +104,9 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
 
         let host = hosts[pane] ?? {
             let host = NSHostingController(
-                rootView: AnyView(pane.view(settings: settings).frame(width: Self.contentWidth))
+                rootView: AnyView(
+                    pane.view(settings: settings, updates: updates).frame(width: Self.contentWidth)
+                )
             )
             hosts[pane] = host
             return host

@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var summaries: SummaryStore!
     private var approvals: ApprovalStore!
     private var usage: UsageStore!
+    private var updates: UpdateStore!
     private var notchController: NotchWindowController!
     private var statusItemController: StatusItemController!
     private var settingsController: SettingsWindowController!
@@ -19,12 +20,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         approvals.start()
         usage = UsageStore(settings: settings)
         usage.start()
+        updates = UpdateStore(settings: settings)
+        updates.start()
 
-        settingsController = SettingsWindowController(settings: settings)
+        settingsController = SettingsWindowController(settings: settings, updates: updates)
         statusItemController = StatusItemController(
             monitor: monitor,
             summaries: summaries,
             usage: usage,
+            updates: updates,
             settings: settings,
             openSettings: { [weak self] in self?.settingsController.present() },
             // The notch controller is built just below; the closure only runs

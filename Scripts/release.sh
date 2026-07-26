@@ -62,15 +62,24 @@ fi
 
 mkdir -p build
 ZIP="build/AgentNotch-$VERSION.zip"
-rm -f "$ZIP"
+rm -f "$ZIP" "$ZIP.sig"
 echo "==> $ZIP"
 # ditto を使うのは、zip(1) と違って拡張属性とシンボリックリンクを壊さないため。
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
+# アプリ内の自動更新はこの署名だけを信頼する。GitHub が配ったという事実は
+# 根拠にしていないので、署名の無い zip をリリースに載せない。
+echo "==> 署名"
+swift Scripts/signing.swift sign "$ZIP" >/dev/null
+PUBKEY="$(awk -F'"' '/publicKeyBase64 = /{print $2}' Sources/AgentNotch/Services/ReleaseSignature.swift)"
+swift Scripts/signing.swift verify "$ZIP" "$ZIP.sig" "$PUBKEY" >/dev/null
+echo "    アプリに埋まっている公開鍵で検証できた"
+
 if [ "$INSTALL" -eq 0 ]; then
   echo
   echo "できたもの: $ZIP"
-  echo "リリースに載せる: gh release upload v$VERSION $ZIP"
+  echo "            $ZIP.sig"
+  echo "リリースに載せる: gh release upload v$VERSION $ZIP $ZIP.sig"
   echo "自分のマシンに入れる: $0 --install"
   exit 0
 fi
