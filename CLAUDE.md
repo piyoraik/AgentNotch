@@ -56,6 +56,12 @@ open "$(xcodebuild -project ClaudeNotch.xcodeproj -scheme ClaudeNotch \
 
 **トークンは保持しない。** CLI がおよそ 1 時間ごとにローテートするため、`ClaudeCredentials.accessToken()` を毎回呼ぶ。
 
+**コストは請求額ではない。** 定額プランはトークン単位で課金されないため、`TokenPricing` が出すのは「同じ処理を従量課金の API で回した場合」の換算値。UI と書き出しの両方でこの但し書きを外さない。単価表は `Models/TokenPricing.swift` の一箇所だけに置く。日付入りのスナップショット ID（`claude-sonnet-4-5-20250929`）や未知の新モデルは `families` のキーワード一致でティア単価に落ちるので、モデルが増えても金額が黙って 0 にならない。ティアが変わったときだけ表を直す。
+
+**パターンルールは連結したコマンドを通さない。** `xcodegen generate *` を許可しても、`xcodegen generate && rm -rf /` は自動許可してはならない。`AlwaysAllowRule.matches` はシェル系ツール（`Bash` / `BashOutput`）に限り、`&&` `||` `;` `|` `` ` `` `$(` 改行 `>` `<` のいずれかを含む入力ではパターン照合を降りて通常の承認に戻す。前方一致だけで判定すると、承認済みの接頭辞の後ろに任意のコマンドを連結できてしまう。`chainingTokens` を削らない。
+
+**繰り返しアニメーションを SwiftUI で書かない。** `repeatForever` を使うと、そのアニメーションが動いているあいだ `NSHostingView` のレイアウトが毎フレーム走る。常時見えているノッチでは実測で CPU が 5% → 55% になった。マークの回転（`ClaudeMark.swift` の `MarkLayerView`）と稼働中の点（`Motion.swift` の `PulseDotView`）は `CABasicAnimation` をレイヤに載せて逃がしている。さらに `shouldRasterize` で焼き付け、`preferredFrameRateRange` を 24fps に落として 5% 台に戻した。この 3 点（レイヤ・ラスタライズ・フレームレート）のどれを外しても数十 % 戻る。状態が変わった瞬間の一度きりのアニメーションは SwiftUI 側でよい。
+
 **UI を全部隠せる状態を作らない。** メニューバーアイコンとノッチパネルは個別に非表示にできるが、両方消しても `applicationShouldHandleReopen` で設定ウィンドウに戻れる。承認待ちが発生したときは `showNotchPanel` が false でもパネルを前面に出す（`NotchWindowController` の `approvals.$pending` 監視）。ブロックされたセッションに応答できない状態を作らないため。
 
 ## Swift 6 concurrency の扱い
@@ -90,6 +96,47 @@ app → bridge   {"behavior":"allow"} または {"behavior":"deny"} + "\n"
 
 承認待ちの間はパネルを閉じさせない（`NotchWindowController` のクリック監視が `approvals.pending` を見ている）。セッションがブロックされたまま UI が消えると復帰手段がなくなるため。
 
+### フックが渡してくる中身
+
+実測したペイロードの形。ドキュメントに載っていない項目があるので、変更するときは実データで確かめる。
+
+```
+session_id / transcript_path / cwd / prompt_id / permission_mode / effort
+tool_name / tool_input / permission_suggestions
+```
+
+`tool_input` はツールごとに形が違う。`ApprovalRequest.interpret` がここを引き受け、パネルは `ApprovalBody` だけを見る。
+
+| ツール | 使う項目 |
+| --- | --- |
+| Bash | `command` と `description`（`description` が見出しになる） |
+| Edit | `file_path` / `old_string` / `new_string` → 差分表示 |
+| Write | `file_path` / `content` |
+| Read | `file_path` のみ（本文なし） |
+
+`permission_suggestions` には CLI 自身が出す候補が入る。`addRules` の `ruleContent`（`xcodegen generate *` など）だけを拾い、`setMode` は捨てる。**フックが返せるのは `behavior` と `updatedInput` だけで、モード変更やルール追加は返せない**ため、`setMode` を UI に出しても実行できない。
+
+### 返せないもの
+
+- セッションのモード変更（`acceptEdits` など）。「そのツールを常に許可」で代替するしかない。
+- 拒否理由を Claude に伝える経路は**未確認**。`additionalContext` / `reason` / `systemMessage` のどれが効くかは実機検証が要る。承認要求を出さない権限モードのセッションからは検証できない点に注意。
+
+## 常に許可
+
+`AlwaysAllowStore`（`UserDefaults` の `alwaysAllowRules`）が標準の承認を保持し、`ApprovalStore` がパネルを出す前に照合する。一致すれば通知もパネルも出さずに `allow` を返す。
+
+粒度は 3 つ。UI では色で区別する。
+
+| scope | 意味 | 由来 |
+| --- | --- | --- |
+| `pattern` | `xcodegen generate *` のような前方一致 | `permission_suggestions` の候補 |
+| `exact` | 入力が完全一致したときだけ | 候補がないときのフォールバック |
+| `tool` | そのツールの全呼び出し | 手動選択のみ。オレンジで警告する |
+
+`~/.claude/settings.json` は書き換えない。アプリ内に閉じているので、一覧と削除がアプリだけで完結する。
+
+**ルールは必ず一覧から消せるようにしておく。** 一覧はセッション一覧ヘッダーの盾バッジから開く（`AlwaysAllowRulesView`）。押した本人が後から気づけない標準承認は作らない。
+
 ## 構成
 
 ```
@@ -107,4 +154,8 @@ Sources/ClaudeNotch/
 
 ## 現在の状態
 
-承認機能は実装とエンドツーエンドの疎通確認まで済んでいるが、**`~/.claude/settings.json` へのフック登録は未実施**。登録手順は README を参照。設定ファイルを編集する際は必ずバックアップを取る。
+承認機能は `~/.claude/settings.json` の `PermissionRequest` にフック登録済みで、実機で往復を確認してある（手順は README）。設定ファイルを編集するときは必ずバックアップを取る。
+
+このマシンには AgentPeek と codeisland のフックも同じイベントに載っている。同一イベントのフックは並行実行されるので、複数が決定を返したときの優先順位は未確認。
+
+拒否理由の伝達だけ未検証のまま残っている。検証するときは、合言葉を含む入力のときだけ拒否を返す一時フックを足し、**承認プロンプトが実際に出るセッション**から叩く。権限モードによっては `PermissionRequest` 自体が発生せず、いくら実行しても再現しない。検証用フックは他セッションの入力も受け取るので、終わったら必ず外してログを消す。
