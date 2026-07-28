@@ -9,3 +9,6 @@ DerivedData/
 xcuserdata/
 
 .DS_Store
+
+# 撮影した画面全体。切り出したものだけを docs/images/ に置く
+docs/images/raw/
