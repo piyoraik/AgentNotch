@@ -319,7 +319,9 @@ private struct HookSection: View {
                     Text("settings.json を \(backup) に控えました。")
                         .settingsFootnote()
                 }
-                Text("~/.claude/settings.json にブリッジを登録します。書き換える前に必ずバックアップを取りますが、整形は失われます。ブリッジはアプリの外（~/Library/Application Support/AgentNotch/bin）に置くので、アプリを移動してもフックは壊れません。")
+                // verbatim にしないと、2 つの ~ に挟まれた範囲を Markdown が
+                // 打ち消し線として食う（チルダごと消えて取り消し線が引かれる）。
+                Text(verbatim: "~/.claude/settings.json にブリッジを登録します。書き換える前に必ずバックアップを取りますが、整形は失われます。ブリッジはアプリの外（~/Library/Application Support/AgentNotch/bin）に置くので、アプリを移動してもフックは壊れません。")
                     .settingsFootnote()
             }
         }
