@@ -12,54 +12,79 @@ struct ApprovalAlwaysAllowButtons: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ForEach(request.suggestedRules, id: \.self) { rule in
+            // A standing rule can't answer a question — it would return "allow"
+            // with nothing in it, which Claude Code reads as no decision and
+            // asks the terminal instead. `ApprovalStore` skips its rules for
+            // these tools for the same reason; offering the buttons here would
+            // just be a switch that does nothing.
+            if !request.requiresInteraction {
+                ForEach(request.suggestedRules, id: \.self) { rule in
+                    button(
+                        title: "今後 \(rule) は確認しない",
+                        subtitle: "Claude Code の推奨する範囲",
+                        icon: "checkmark.shield.fill",
+                        tint: .cyan,
+                        monospacedTitle: true
+                    ) {
+                        onAlwaysAllow(
+                            AlwaysAllowRule(toolName: request.toolName, scope: .pattern, value: rule)
+                        )
+                    }
+                }
+
+                if request.suggestedRules.isEmpty, !request.detail.isEmpty {
+                    button(
+                        title: "この内容を常に許可",
+                        subtitle: "入力が完全に一致したときだけ",
+                        icon: "checkmark.shield",
+                        tint: .cyan
+                    ) {
+                        onAlwaysAllow(
+                            AlwaysAllowRule(toolName: request.toolName, scope: .exact, value: request.detail)
+                        )
+                    }
+                }
+
                 button(
-                    title: "今後 \(rule) は確認しない",
-                    subtitle: "Claude Code の推奨する範囲",
-                    icon: "checkmark.shield.fill",
-                    tint: .cyan,
-                    monospacedTitle: true
+                    title: "\(request.toolName) を常に許可",
+                    subtitle: "入力を問わず、以後すべて通す",
+                    icon: "exclamationmark.triangle",
+                    tint: .orange
                 ) {
                     onAlwaysAllow(
-                        AlwaysAllowRule(toolName: request.toolName, scope: .pattern, value: rule)
+                        AlwaysAllowRule(toolName: request.toolName, scope: .tool, value: nil)
                     )
                 }
-            }
-
-            if request.suggestedRules.isEmpty, !request.detail.isEmpty {
-                button(
-                    title: "この内容を常に許可",
-                    subtitle: "入力が完全に一致したときだけ",
-                    icon: "checkmark.shield",
-                    tint: .cyan
-                ) {
-                    onAlwaysAllow(
-                        AlwaysAllowRule(toolName: request.toolName, scope: .exact, value: request.detail)
-                    )
-                }
-            }
-
-            button(
-                title: "\(request.toolName) を常に許可",
-                subtitle: "入力を問わず、以後すべて通す",
-                icon: "exclamationmark.triangle",
-                tint: .orange
-            ) {
-                onAlwaysAllow(
-                    AlwaysAllowRule(toolName: request.toolName, scope: .tool, value: nil)
-                )
             }
 
             Button(action: onPassthrough) {
-                Text("ターミナルで決める")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+                VStack(spacing: 1) {
+                    Text(passthroughLabel)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.45))
+                    // Measured: a subagent's request that goes unanswered runs
+                    // anyway. The bridge fails open after 120s, the terminal
+                    // asks nothing, and Claude Code applies its own default —
+                    // in the observed case that meant the tool went ahead. The
+                    // old label promised a prompt that never comes.
+                    if request.isSubagent {
+                        Text("Claude Code の既定に委ねます")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var passthroughLabel: String {
+        if request.isSubagent { return "ここでは決めない" }
+        if request.requiresInteraction { return "ターミナルで答える" }
+        return "ターミナルで決める"
     }
 
     /// Each choice states its own consequence: the tool-wide one is easy to

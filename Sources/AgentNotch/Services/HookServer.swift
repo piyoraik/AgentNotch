@@ -135,9 +135,24 @@ final class HookServer {
 
     private static func respond(client: Int32, decision: ApprovalDecision) {
         defer { close(client) }
-        guard decision != .passthrough else { return }
 
-        var data = (try? JSONSerialization.data(withJSONObject: ["behavior": decision.rawValue])) ?? Data()
+        let payload: [String: Any]
+        switch decision {
+        case .passthrough:
+            return
+        case .allow:
+            payload = ["behavior": "allow"]
+        case .deny:
+            payload = ["behavior": "deny"]
+        case .answer(let input):
+            // Unreadable input would become a bare allow, which for these tools
+            // reads as "no decision" anyway — say nothing instead, so the
+            // terminal asks rather than the answer being silently dropped.
+            guard let object = try? JSONSerialization.jsonObject(with: input) as? [String: Any] else { return }
+            payload = ["behavior": "allow", "updatedInput": object]
+        }
+
+        var data = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
         data.append(0x0A)
         _ = data.withUnsafeBytes { buffer -> Int in
             guard let base = buffer.baseAddress else { return -1 }

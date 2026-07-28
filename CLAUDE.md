@@ -16,6 +16,8 @@ xcodebuild -project AgentNotch.xcodeproj -scheme AgentNotch \
 
 既存ファイルの編集だけなら `xcodegen generate` は不要。`project.yml` がソースオブトゥルースで、`.xcodeproj` は生成物。**`.xcodeproj` を直接編集しない。**
 
+**`xcodebuild` の出力を `head` に通さない。** `xcodebuild … | grep … | head` はパイプを早く閉じるため `xcodebuild` が居残り、DerivedData の `XCBuildData/build.db` を握り続ける。次のビルドは `database is locked / Possibly there are two concurrent builds` で落ちるが、原因は自分の残骸であって同時ビルドではない。絞りたいときはログをファイルに落としてから `grep` する。
+
 **動きの善し悪しは Debug ビルドで判断しない。** 同じ状態（パネルを開いたまま）で実測して Debug 18.2% / Release 0.2% と 2 桁違う。SwiftUI は最適化なしだと 1 フレームあたりのコストが跳ね上がるので、「もっさりする」の切り分けは必ず Release で行う。
 
 ```bash
@@ -184,6 +186,8 @@ python3 Design/generate-icon.py
 
 **非表示設定で前面に出したら、畳むときに戻す。** 承認待ち（`approvals.$pending`）とメニューの「使用状況レポート…」（`NotchWindowController.showReport`）は `showNotchPanel` が false でも窓を出す。戻すのは `setExpanded(false)` の一箇所だけなので、そこに片付けを集約する。出しっぱなしにすると、折りたたんだピルが設定をトグルするまで画面に残る。
 
+**`ShellOutline` は表示専用で、判断に使わない。** 承認パネルのコマンド欄は `ShellOutline` が「実行されるプログラム」のチップとヒアドキュメント本体に分けて見せる（`python3 - <<EOF … EOF | sort` で本体が畳まれ、パイプ先が見えるようにするため）。この分解は引用符を追うだけの近似で、`AlwaysAllowRule` の照合は生のコマンド文字列のまま行う。**照合をこちらに寄せない。** 分解が外れても表示が読みにくくなるだけで済むのは、許可の範囲がこれに依存していないからこそ。
+
 **パターンルールは連結したコマンドを通さない。** `xcodegen generate *` を許可しても、`xcodegen generate && rm -rf /` は自動許可してはならない。`AlwaysAllowRule.matches` はシェル系ツール（`Bash` / `BashOutput`）に限り、`&&` `||` `;` `|` `` ` `` `$(` 改行 `>` `<` のいずれかを含む入力ではパターン照合を降りて通常の承認に戻す。前方一致だけで判定すると、承認済みの接頭辞の後ろに任意のコマンドを連結できてしまう。`chainingTokens` を削らない。
 
 **繰り返しアニメーションを SwiftUI で書かない。** `repeatForever` を使うと、そのアニメーションが動いているあいだ `NSHostingView` のレイアウトが毎フレーム走る。常時見えているノッチでは実測で CPU が 5% → 55% になった。マークの回転（`MarkLayer.swift` の `MarkLayerView`）と稼働中の点（`Motion.swift` の `PulseDotView`）は `CABasicAnimation` をレイヤに載せて逃がしている。`preferredFrameRateRange` は 24fps に落とす。常に出ているノッチでゆっくりした回転に 120fps 相当を回す価値はない。状態が変わった瞬間の一度きりのアニメーションは SwiftUI 側でよい。
@@ -261,8 +265,19 @@ strict concurrency が有効なため、以下の型を踏襲する。
 ```
 bridge → app   フックの stdin をそのまま + "\n"
 app → bridge   {"behavior":"allow"} または {"behavior":"deny"} + "\n"
-               無応答で閉じた場合はターミナルに委譲
+               答えを返すときは {"behavior":"allow","updatedInput":{…}}
+               無応答で閉じた場合は CLI の既定に落ちる（下記）
 ```
+
+**無応答は「ターミナルに委譲」ではない。実測では許可になる。** サブエージェントの `Read` と `WebFetch`（CLI 既定が「訊く」側のツール）をパネルに出したまま放置したところ、どちらも 120 秒後にそのまま実行された（128 秒 / 144 秒）。ターミナルにプロンプトは出ない。**フックを入れた時点で、承認の窓口はノッチだけになる。** そのため `ApprovalStore.scheduleExpiry` が `ApprovalRequest.decisionDeadline`（110 秒）で `deny` を返す。
+
+**この 110 秒をブリッジの 120 秒に近づけない。** ブリッジが終了した後に返しても閉じたソケットに書くだけで、何も起きずに許可される。逆にこの自動応答を消すと、席を外している間の全要求が通る。10 秒の余裕が足りることは実測済み（サブエージェントの `Bash` を放置し、119 秒で `Permission denied by hook` が返った。うち 5〜7 秒はサブエージェントの起動）。
+
+**期限切れの自動応答をブリッジに移さない。** ブリッジは失敗経路がすべてフェイルオープンの素の中継でなければならない。「答えなかった」の解釈はアプリ側の方針であって、中継の仕事ではない。
+
+**`AskUserQuestion` / `ExitPlanMode` の期限切れだけは `passthrough`。** 質問に `deny` を返しても何も答えていない。この 2 つは CLI が本当に自前のプロンプトへ落とすので、ターミナルで答えられる。
+
+**`updatedInput` を落とさない。** ブリッジはこれを `hookSpecificOutput.decision.updatedInput` に載せて出す。古いブリッジは `behavior` しか読まないので、アプリだけ新しいとユーザーの選んだ答えが黙って捨てられ、ターミナルが同じことをもう一度訊く。`refreshInstalledBridge()` の SHA 比較が効くのはこの食い違いを直すため。
 
 ブリッジは `PermissionRequest` の応答を 120 秒待つ。フック側の `timeout` はこれより長くしておくこと（150 秒程度）。
 
@@ -277,7 +292,14 @@ app → bridge   {"behavior":"allow"} または {"behavior":"deny"} + "\n"
 ```
 session_id / transcript_path / cwd / prompt_id / permission_mode / effort
 tool_name / tool_input / permission_suggestions
+agent_id / agent_type            サブエージェントの呼び出しにだけ付く
 ```
+
+**サブエージェントの承認は `agent_type` で判別する。** 同じコマンドを親とサブエージェントの両方から踏ませて採った差分がこれ。`session_id` と `transcript_path` は**どちらも親のもの**で（サブエージェントのトランスクリプトは別ファイル `<parentSessionId>/subagents/agent-<id>.jsonl` に書かれるのに、ペイロードは親を指す）、`effort` は親の呼び出しにだけ付く。**`transcript_path` で判別しようとしない。**
+
+パネルに出す理由は、サブエージェント発だと**親が動き続ける**こと。セッションは busy のままターミナルは静かなので、`agent_type` を出さないと「承認していないのに進んでいる」に見える。
+
+**CLI 自身が安全と見なしたコマンドはフックまで来ない。** 実測で `echo …` と `python3 -c "print(…)" | tr a-z A-Z` は `PermissionRequest` を発火せず、`touch <path>` と `which claude && claude --version` は発火した。パイプの有無ではない。フックに来ない操作があることを前提に、「パネルに出た件数」を実行された操作の総数と読まない。
 
 `tool_input` はツールごとに形が違う。`ApprovalRequest.interpret` がここを引き受け、パネルは `ApprovalBody` だけを見る。
 
@@ -294,7 +316,38 @@ tool_name / tool_input / permission_suggestions
 
 - セッションのモード変更（`acceptEdits` など）。「そのツールを常に許可」で代替するしかない。
 - 拒否理由を Claude に伝える経路は**未確認**。`additionalContext` / `reason` / `systemMessage` のどれが効くかは実機検証が要る。承認要求を出さない権限モードのセッションからは検証できない点に注意。
-- `Notification` には**何も返せない**。プラン承認や `AskUserQuestion` はこの経路でしか気付けず、答えるのはターミナルになる。`NoticeBanner` に許可 / 拒否のボタンを付けない。押せそうに見えるものが効かないほうが、何も無いより悪い。
+- `Notification` には**何も返せない**。`NoticeBanner` に許可 / 拒否のボタンを付けない。押せそうに見えるものが効かないほうが、何も無いより悪い。
+
+### 質問に答える（`updatedInput`）
+
+**`AskUserQuestion` と `ExitPlanMode` は `PermissionRequest` として届く。** 通知でしか気付けないわけではない。ただし**素の `allow` では通らない**。CLI の該当箇所（`claude.exe` に埋まっている JS）はこうなっている。
+
+```js
+if (!updatedInput && tool.requiresUserInteraction?.()) return null   // 「フックは決めなかった」
+```
+
+`null` はターミナルの承認プロンプトに落ちる。つまり素の `allow` を返すと、**ノッチで「許可」を押したのに何も起きず、ターミナルが同じことを訊く**。この 2 つのツールに限り、決めるには `updatedInput` を必ず添える（`ApprovalRequest.allowDecision`）。中身は `tool_input` そのままでよく、**在ることが「片付いた」の印**になっている。
+
+答えを返すのも同じ経路で、`updatedInput` に `answers` を足す（`ApprovalRequest.answerDecision`）。
+
+| 項目 | 形 |
+| --- | --- |
+| `answers` | 質問文 → 選んだラベル。複数選択は `", "` 連結（CLI が同じ区切りで割って候補と照合する） |
+| `questions` | 受け取った配列をそのまま返す |
+
+**`tool_input` は生のまま持ち回る**（`ApprovalRequest.rawInput`）。パース済みのモデルから組み直すと、CLI が後で足した項目が往復で消える。
+
+**この 2 つに「常に許可」を作らない。** 素の `allow` は答えではないので、標準承認が黙って通した瞬間にターミナル送りになり、パネルも出ない（誰も見ていない場所で止まる）。`ApprovalStore.handle` と `ApprovalAlwaysAllowButtons` の両方で `requiresInteraction` を見て降りる。
+
+**未選択のまま送らない。** `answers` が空だと CLI は「The user did not answer the questions.」を渡す。「回答を送る」は全問に選択があるまで押せない。
+
+- 拒否理由を Claude に伝える経路は**未確認**。`additionalContext` / `reason` / `systemMessage` のどれが効くかは実機検証が要る。承認要求を出さない権限モードのセッションからは検証できない点に注意。
+**自由記述はパネルで受け取らない。** 各質問の末尾に「その他（自由に書く）」を出すが、これは入力欄ではなく**ターミナルへの受け渡し**（`passthrough`）。`NotchWindow` は `canBecomeKey = false` なので `TextField` を置いてもキー入力が入らない。ここに入力欄を足さない。承認カードの間だけキーウィンドウにする案は、**他のセッションで打っている最中に奪う**ので実測なしに入れない。
+
+行そのものは CLI に合わせて必ず出す（CLI は「その他」を全質問に自前で足すので、選択肢で終わる一覧は選択肢が消えて見える）。選ぶ側の色（ミント）を使わず、破線の枠で「状態が変わるのではなく移る」ことを見せている。
+
+- `AskUserQuestion` の `response` と `annotations` は**フックからは載せていない**。`response` は補足ではなく**選択を上書きする**（結果の組み立てが `response` → `answers` の順で、`response` があると `answers` は結果に出ない）。選択に一言添えたいときは `annotations[質問文].notes` の側で、こちらは選択と併記される。どちらも入力欄が要るので上と同じ話になる。
+- `ExitPlanMode` を許可すると、プラン終了後の権限モードは CLI の `prePlanMode` になる。ターミナルの「自動で編集を受け入れる / 都度確認」の選択は**フックからは返せない**ので、そこを選びたいときは「ターミナルで答える」。
 
 ### フックの配置
 

@@ -24,11 +24,17 @@ func failOpen() -> Never {
     exit(0)
 }
 
-func emit(behavior: String) -> Never {
+// `updatedInput` replaces the tool's own input. The app sends it when the user
+// answered a question in the notch (AskUserQuestion) or settled something the
+// terminal would otherwise have to ask about: Claude Code treats an `allow`
+// without it as "the hook had no opinion" for those tools and prompts anyway.
+func emit(behavior: String, updatedInput: [String: Any]?) -> Never {
+    var decision: [String: Any] = ["behavior": behavior]
+    if behavior == "allow", let updatedInput { decision["updatedInput"] = updatedInput }
     let payload: [String: Any] = [
         "hookSpecificOutput": [
             "hookEventName": "PermissionRequest",
-            "decision": ["behavior": behavior],
+            "decision": decision,
         ],
     ]
     guard let data = try? JSONSerialization.data(withJSONObject: payload) else { failOpen() }
@@ -119,4 +125,4 @@ else {
     failOpen()
 }
 
-emit(behavior: behavior)
+emit(behavior: behavior, updatedInput: object["updatedInput"] as? [String: Any])

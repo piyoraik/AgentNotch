@@ -39,13 +39,45 @@ final class ApprovalStore: ObservableObject, @unchecked Sendable {
             }
 
             // A standing approval answers silently: no panel, no alert.
-            if self.alwaysAllow.allows(request) {
+            //
+            // Never for a tool that exists to ask the user something: "allow"
+            // is not an answer to a question, and Claude Code would fall back
+            // to the terminal prompt with nobody watching for it.
+            if !request.requiresInteraction, self.alwaysAllow.allows(request) {
                 self.lastDecisionAt[request.sessionId] = Date()
                 respond(.allow)
                 return
             }
 
             self.pending.append(Pending(request: request, respond: respond))
+            self.scheduleExpiry(of: request)
+        }
+    }
+
+    /// Answers a request nobody got to, just before the bridge gives up.
+    ///
+    /// Two things go wrong without this. The card outlives the bridge, and since
+    /// the panel refuses to collapse while anything is pending
+    /// (`NotchWindowController`), one abandoned request pins the panel open with
+    /// buttons that write into a closed pipe. And letting the window run out is
+    /// not neutral: measured, an unanswered request is allowed — no terminal
+    /// prompt appears and Claude Code applies its own default — so silence
+    /// granted everything the panel had asked about.
+    ///
+    /// Answering at `decisionDeadline` keeps that from being the outcome. It is
+    /// still fail-open in the sense the bridge means: no failure path here
+    /// blocks a session, and a session that gets a denial carries on and can say
+    /// so. Deliberately not the bridge's job — it must stay a dumb relay.
+    private func scheduleExpiry(of request: ApprovalRequest) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + request.secondsLeft()) { [weak self] in
+            guard let self,
+                  let index = self.pending.firstIndex(where: { $0.id == request.id })
+            else { return }
+            let abandoned = self.pending.remove(at: index)
+            // Counts as this store having answered: `NoticeStore` would
+            // otherwise raise "要応答" about a permission just settled here.
+            self.lastDecisionAt[request.sessionId] = Date()
+            abandoned.respond(request.expiryDecision)
         }
     }
 
